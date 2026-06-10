@@ -75,7 +75,7 @@ ul.tt-answers{margin:6px 0 2px 14px;padding:0;list-style:disc}
 ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1px}
 
 /* Axis text */
-.y-label{font-size:10px;fill:#475569;cursor:default}
+.y-label{font-size:10px;cursor:default}
 .y-label:hover{fill:#1d4ed8}
 .x-label{font-size:9px;fill:#94a3b8}
 .axis-title{font-size:10px;fill:#94a3b8;font-weight:600}
@@ -276,12 +276,14 @@ function renderMatrix(tid) {
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
     const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
+    const condColor = ni ? (ni.cond === 'OR' ? '#6ee7b7' : '#fca5a5') : '#475569';
     yG.append('text')
       .attr('class','y-label')
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
+      .attr('fill', condColor)
+      .text(`#${nid}`)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
