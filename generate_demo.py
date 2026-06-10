@@ -32,7 +32,7 @@ def load_data():
                 d = json.loads(line)
                 docs[d['id']] = {
                     'title': d.get('title', 'Untitled'),
-                    'text': d.get('text', '')[:1500],
+                    'text': d.get('text', '')[:3000],
                 }
 
     # nugget_info[tid][nugget_id_str] = {question, answers, cond}
@@ -161,7 +161,7 @@ select:focus{border-color:#3b82f6}
   position:fixed;pointer-events:none;z-index:9999;
   background:rgba(15,23,42,.96);color:#f1f5f9;
   padding:13px 15px;border-radius:8px;
-  font-size:.8rem;line-height:1.55;max-width:480px;
+  font-size:.8rem;line-height:1.55;max-width:480px;max-height:80vh;overflow-y:auto;
   display:none;box-shadow:0 8px 32px rgba(0,0,0,.4);
   border:1px solid rgba(255,255,255,.08)
 }
@@ -174,6 +174,8 @@ select:focus{border-color:#3b82f6}
 .badge-blue{display:inline-block;background:#1d4ed8;color:#bfdbfe;padding:1px 7px;border-radius:10px;font-size:.72rem;font-weight:600;margin-left:5px}
 .badge-or{display:inline-block;background:#065f46;color:#6ee7b7;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
 .badge-and{display:inline-block;background:#7c2d12;color:#fca5a5;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
+ul.tt-answers{margin:6px 0 2px 14px;padding:0;list-style:disc}
+ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1px}
 
 /* Axis text */
 .y-label{font-size:10px;fill:#475569;cursor:default}
@@ -337,7 +339,7 @@ function renderMatrix(tid) {
 
       const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
       const answersHtml = ni
-        ? `<div class="tt-sub" style="margin-top:4px"><em>Answer${ni.answers.length>1?'s':''}: </em>${esc(ni.answers.slice(0,4).join(' / '))}${ni.answers.length>4?' …':''}</div>`
+        ? `<ul class="tt-answers">${ni.answers.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
         : '';
       tt.innerHTML = `
         <div class="tt-tag">Nugget #${esc(nugId)} ${condBadge}<span class="badge-blue" style="margin-left:4px">${nCov} docs</span></div>
@@ -347,7 +349,7 @@ function renderMatrix(tid) {
         <div class="tt-section">
           <div class="tt-tag">Document</div>
           <div class="tt-title">${esc(di.title)}</div>
-          <div class="tt-text">${esc((di.text||'').substring(0,900))}${di.text && di.text.length>900?'…':''}</div>
+          <div class="tt-text">${esc((di.text||'').substring(0,2000))}${di.text && di.text.length>2000?'…':''}</div>
           <div class="tt-sub" style="margin-top:6px">Covers <strong>${dCov}</strong> nugget${dCov!==1?'s':''} in this topic</div>
           <div class="tt-id">${docId}</div>
         </div>`;
@@ -356,8 +358,7 @@ function renderMatrix(tid) {
       const x = event.clientX, y = event.clientY;
       const vw = window.innerWidth, vh = window.innerHeight;
       let left = x + 16, top = y - 12;
-      if (left + 340 > vw) left = x - 340 - 8;
-      if (top + 320 > vh) top = vh - 324;
+      if (left + 480 > vw) left = x - 488;
       if (top < 4) top = 4;
       tt.style.left = left + 'px';
       tt.style.top = top + 'px';
@@ -383,11 +384,11 @@ function renderMatrix(tid) {
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(cs >= 10 ? `#${nid} ${labelQ} (${cov})` : `#${nid} (${cov})`)
+      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
-          ? `<div class="tt-sub" style="margin-top:5px"><em>Answer${ni.answers.length>1?'s':''}: </em>${esc(ni.answers.slice(0,5).join(' / '))}${ni.answers.length>5?' …':''}</div>`
+          ? `<ul class="tt-answers">${ni.answers.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
           : '';
         tt.innerHTML = `
           <div class="tt-tag">Nugget #${esc(nid)} ${condBadge}</div>
