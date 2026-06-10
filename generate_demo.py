@@ -35,10 +35,28 @@ def load_data():
                     'text': d.get('text', '')[:400],
                 }
 
-    return qrel, topics, docs
+    # nugget_info[tid][nugget_id_str] = {question, answers, cond}
+    # cond "OR" = list of acceptable answers; "AND" = single specific answer
+    nugget_info = {}
+    with open(DATA_DIR / 'neuclir24.nuggets.human.jsonl') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            tid = str(d['id'])
+            info = {}
+            for idx, item in enumerate(d['nuggets'], start=1):
+                question, answers = item[0], item[1]
+                if isinstance(answers, list):
+                    info[str(idx)] = {'question': question, 'answers': answers, 'cond': 'OR'}
+                else:
+                    info[str(idx)] = {'question': question, 'answers': [answers], 'cond': 'AND'}
+            nugget_info[tid] = info
+
+    return qrel, topics, docs, nugget_info
 
 
-def process_data(qrel, topics, docs):
+def process_data(qrel, topics, docs, nugget_info):
     vis_data = {}
     for tid in sorted(topics.keys()):
         if tid not in qrel:
@@ -62,12 +80,15 @@ def process_data(qrel, topics, docs):
             for d, label in ddocs.items()
         ]
 
+        tinfo = nugget_info.get(tid, {})
+
         vis_data[tid] = {
             'title': topics[tid]['title'],
             'background': topics[tid].get('background', ''),
             'problem_statement': topics[tid].get('problem_statement', ''),
             'nuggets': sorted_nuggets,
             'nugget_cov': nugget_cov,
+            'nugget_info': tinfo,
             'docs': sorted_docs,
             'doc_cov': dict(doc_cov),
             'doc_info': {d: docs.get(d, {'title': '?', 'text': ''}) for d in sorted_docs},
@@ -151,6 +172,8 @@ select:focus{border-color:#3b82f6}
 #tooltip .tt-text{color:#cbd5e1;font-size:.76rem;margin-top:6px;line-height:1.45}
 #tooltip .tt-id{color:#475569;font-size:.7rem;margin-top:5px;font-family:monospace}
 .badge-blue{display:inline-block;background:#1d4ed8;color:#bfdbfe;padding:1px 7px;border-radius:10px;font-size:.72rem;font-weight:600;margin-left:5px}
+.badge-or{display:inline-block;background:#065f46;color:#6ee7b7;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
+.badge-and{display:inline-block;background:#7c2d12;color:#fca5a5;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
 
 /* Axis text */
 .y-label{font-size:10px;fill:#475569;cursor:default}
@@ -306,15 +329,21 @@ function renderMatrix(tid) {
       const di = d.doc_info[docId] || {title:'?', text:''};
       const nCov = d.nugget_cov[nugId];
       const dCov = d.doc_cov[docId];
+      const ni = d.nugget_info && d.nugget_info[nugId];
 
       rowHL.attr('display',null).attr('y', c[0]*cs);
       colHL.attr('display',null).attr('x', c[1]*cs);
       d3.select(this).attr('fill','#ef4444');
 
+      const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
+      const answersHtml = ni
+        ? `<div class="tt-sub" style="margin-top:4px"><em>Answer${ni.answers.length>1?'s':''}: </em>${esc(ni.answers.slice(0,4).join(' / '))}${ni.answers.length>4?' …':''}</div>`
+        : '';
       tt.innerHTML = `
-        <div class="tt-tag">Nugget</div>
-        <div class="tt-title">Nugget #${esc(nugId)}<span class="badge-blue">${nCov} docs</span></div>
-        <div class="tt-sub">Covered by ${nCov} of ${nN} total documents (${(nCov/nN*100).toFixed(0)}%)</div>
+        <div class="tt-tag">Nugget #${esc(nugId)} ${condBadge}<span class="badge-blue" style="margin-left:4px">${nCov} docs</span></div>
+        <div class="tt-title">${ni ? esc(ni.question) : 'Nugget #' + esc(nugId)}</div>
+        ${answersHtml}
+        <div class="tt-sub" style="margin-top:4px">Covered by ${nCov} of ${nN} documents (${(nCov/nN*100).toFixed(0)}%)</div>
         <div class="tt-section">
           <div class="tt-tag">Document</div>
           <div class="tt-title">${esc(di.title)}</div>
@@ -347,18 +376,25 @@ function renderMatrix(tid) {
     if (i % showEvery !== 0) return;
     const y = i * cs + cs / 2;
     const cov = d.nugget_cov[nid];
+    const ni = d.nugget_info && d.nugget_info[nid];
+    const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
     yG.append('text')
       .attr('class','y-label')
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(`${nid} (${cov})`)
+      .text(cs >= 10 ? `#${nid} ${labelQ} (${cov})` : `#${nid} (${cov})`)
       .on('mousemove', (event) => {
+        const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
+        const answersHtml = ni
+          ? `<div class="tt-sub" style="margin-top:5px"><em>Answer${ni.answers.length>1?'s':''}: </em>${esc(ni.answers.slice(0,5).join(' / '))}${ni.answers.length>5?' …':''}</div>`
+          : '';
         tt.innerHTML = `
-          <div class="tt-tag">Nugget</div>
-          <div class="tt-title">Nugget #${esc(nid)}<span class="badge-blue">${cov} docs</span></div>
-          <div class="tt-sub">Position in ranking: #${i+1} of ${nN}</div>
-          <div class="tt-sub">Coverage: ${(cov/nD*100).toFixed(1)}% of documents</div>`;
+          <div class="tt-tag">Nugget #${esc(nid)} ${condBadge}</div>
+          <div class="tt-title">${ni ? esc(ni.question) : esc(nid)}</div>
+          ${answersHtml}
+          <div class="tt-sub" style="margin-top:6px">Position in ranking: #${i+1} of ${nN}</div>
+          <div class="tt-sub">Coverage: ${cov} docs (${(cov/nD*100).toFixed(1)}%)</div>`;
         tt.style.display = 'block';
         tt.style.left = (event.clientX + 12) + 'px';
         tt.style.top = (event.clientY - 8) + 'px';
@@ -399,9 +435,9 @@ render(topicIds[0]);
 
 if __name__ == '__main__':
     print('Loading data...')
-    qrel, topics, docs = load_data()
+    qrel, topics, docs, nugget_info = load_data()
     print('Processing...')
-    vis_data = process_data(qrel, topics, docs)
+    vis_data = process_data(qrel, topics, docs, nugget_info)
     stats = {tid: (len(v['nuggets']), len(v['docs']), len(v['cells'])) for tid, v in vis_data.items()}
     for tid, (nn, nd, nc) in stats.items():
         print(f'  Topic {tid}: {nn} nuggets × {nd} docs = {nc} pairs')
