@@ -32,7 +32,7 @@ def load_data():
                 d = json.loads(line)
                 docs[d['id']] = {
                     'title': d.get('title', 'Untitled'),
-                    'text': d.get('text', '')[:400],
+                    'text': d.get('text', '')[:1500],
                 }
 
     # nugget_info[tid][nugget_id_str] = {question, answers, cond}
@@ -161,7 +161,7 @@ select:focus{border-color:#3b82f6}
   position:fixed;pointer-events:none;z-index:9999;
   background:rgba(15,23,42,.96);color:#f1f5f9;
   padding:13px 15px;border-radius:8px;
-  font-size:.8rem;line-height:1.55;max-width:340px;
+  font-size:.8rem;line-height:1.55;max-width:480px;
   display:none;box-shadow:0 8px 32px rgba(0,0,0,.4);
   border:1px solid rgba(255,255,255,.08)
 }
@@ -343,11 +343,11 @@ function renderMatrix(tid) {
         <div class="tt-tag">Nugget #${esc(nugId)} ${condBadge}<span class="badge-blue" style="margin-left:4px">${nCov} docs</span></div>
         <div class="tt-title">${ni ? esc(ni.question) : 'Nugget #' + esc(nugId)}</div>
         ${answersHtml}
-        <div class="tt-sub" style="margin-top:4px">Covered by ${nCov} of ${nN} documents (${(nCov/nN*100).toFixed(0)}%)</div>
+        <div class="tt-sub" style="margin-top:4px">Covered by ${nCov} of ${nD} documents (${(nCov/nD*100).toFixed(0)}%)</div>
         <div class="tt-section">
           <div class="tt-tag">Document</div>
           <div class="tt-title">${esc(di.title)}</div>
-          <div class="tt-text">${esc((di.text||'').substring(0,260))}${di.text && di.text.length>260?'…':''}</div>
+          <div class="tt-text">${esc((di.text||'').substring(0,900))}${di.text && di.text.length>900?'…':''}</div>
           <div class="tt-sub" style="margin-top:6px">Covers <strong>${dCov}</strong> nugget${dCov!==1?'s':''} in this topic</div>
           <div class="tt-id">${docId}</div>
         </div>`;
