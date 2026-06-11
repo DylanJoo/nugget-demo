@@ -85,6 +85,10 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
 /* Axis text */
 .y-label{font-size:10px;fill:#475569;cursor:default}
 .y-label:hover{fill:#1d4ed8}
+.y-label-covered{fill:#10b981 !important;font-weight:600}
+.y-label-covered:hover{fill:#059669 !important}
+.y-label-uncovered{fill:#94a3b8 !important}
+.y-label-uncovered:hover{fill:#64748b !important}
 .x-label{font-size:9px;fill:#94a3b8}
 .axis-title{font-size:10px;fill:#94a3b8;font-weight:600}
 </style>
@@ -200,12 +204,18 @@ function updateLegend() {
   if (viewMode === 'rel') {
     el.innerHTML = `
       <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
-      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
+      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>
+      <span style="margin-left:10px;color:#ef4444;font-weight:700;font-size:.78rem">A</span><span style="margin-left:3px">AND nugget</span>
+      <span style="margin-left:8px;color:#10b981;font-weight:700;font-size:.78rem">O</span><span style="margin-left:3px">OR nugget</span>`;
   } else {
     el.innerHTML = `
       <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (judged)</span>
       <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered (judged)</span>
-      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>`;
+      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>
+      <span style="margin-left:10px;color:#10b981;font-weight:600;font-size:.78rem">&#9632;</span><span style="margin-left:3px">Nugget covered by top-k</span>
+      <span style="margin-left:8px;color:#94a3b8;font-size:.78rem">&#9632;</span><span style="margin-left:3px">Not covered</span>
+      <span style="margin-left:10px;color:#ef4444;font-weight:700;font-size:.78rem">A</span><span style="margin-left:3px">AND nugget</span>
+      <span style="margin-left:8px;color:#10b981;font-weight:700;font-size:.78rem">O</span><span style="margin-left:3px">OR nugget</span>`;
   }
 }
 
@@ -236,11 +246,14 @@ function render(tid) {
     const topK = +document.getElementById('topk-sel').value;
     const totalRun = d.run_docs.length;
     const judgedInTopK = d.run_rated.slice(0, topK).filter(Boolean).length;
-    const coveredCells = d.run_cells.filter(c => c[1] < topK).length;
+    const topKCells = d.run_cells.filter(c => c[1] < topK);
+    const coveredCells = topKCells.length;
+    const coveredNuggetCount = new Set(topKCells.map(c => c[0])).size;
     document.getElementById('stats').innerHTML = `
       <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
       <div class="stat"><div class="stat-val">${Math.min(topK, totalRun)}</div><div class="stat-lbl">Run Docs (top-${topK})</div></div>
       <div class="stat"><div class="stat-val">${judgedInTopK}</div><div class="stat-lbl">Judged in Top-${topK}</div></div>
+      <div class="stat" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);border-color:#6ee7b7"><div class="stat-val" style="color:#059669">${coveredNuggetCount}</div><div class="stat-lbl" style="color:#10b981">Nuggets Covered</div></div>
       <div class="stat"><div class="stat-val">${coveredCells.toLocaleString()}</div><div class="stat-lbl">Covered Pairs</div></div>`;
   }
 
@@ -310,6 +323,8 @@ function renderMatrix(tid) {
   const activeCells = isRun
     ? d.run_cells.filter(c => c[1] < topK)
     : d.cells;
+
+  const coveredNuggetIdxs = isRun ? new Set(activeCells.map(c => c[0])) : null;
 
   function showTooltip(event, nugIdx, docIdx, label) {
     const nugId = d.nuggets[nugIdx];
@@ -435,12 +450,34 @@ function renderMatrix(tid) {
     const y = i * cs + cs / 2;
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
-    yG.append('text')
-      .attr('class','y-label')
+    const covClass = isRun
+      ? (coveredNuggetIdxs.has(i) ? ' y-label-covered' : ' y-label-uncovered')
+      : '';
+
+    // AND/OR condition color strip at left edge
+    if (ni) {
+      const condColor = ni.cond === 'OR' ? '#10b981' : '#ef4444';
+      yG.append('rect')
+        .attr('x', 1).attr('y', i * cs)
+        .attr('width', 4).attr('height', Math.max(1, cs - 1))
+        .attr('fill', condColor).attr('rx', 1).attr('pointer-events', 'none');
+    }
+
+    const textEl = yG.append('text')
+      .attr('class', `y-label${covClass}`)
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
-      .attr('font-size', Math.min(10, cs))
-      .text(`#${nid} (${cov})`)
+      .attr('font-size', Math.min(10, cs));
+
+    if (ni) {
+      const condColor = ni.cond === 'OR' ? '#10b981' : '#ef4444';
+      textEl.append('tspan').attr('fill', condColor).attr('font-weight', '700')
+        .text(ni.cond === 'OR' ? 'O ' : 'A ');
+      textEl.append('tspan').text(`#${nid} (${cov})`);
+    } else {
+      textEl.text(`#${nid} (${cov})`);
+    }
+    textEl
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
