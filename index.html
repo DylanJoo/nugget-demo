@@ -372,10 +372,7 @@ function renderMatrix(tid) {
   }
 
   function cellFill(nugIdx, hover) {
-    const ni = d.nugget_info && d.nugget_info[d.nuggets[nugIdx]];
-    if (!ni) return hover ? '#1d4ed8' : '#3b82f6';
-    if (ni.cond === 'OR') return hover ? '#059669' : '#34d399';
-    return hover ? '#dc2626' : '#f87171';
+    return hover ? '#1d4ed8' : '#3b82f6';
   }
 
   g.selectAll('rect.c')
@@ -466,7 +463,7 @@ function renderMatrix(tid) {
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
+      .text(nid)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
