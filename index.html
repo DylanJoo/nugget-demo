@@ -256,6 +256,8 @@ function renderMatrix(tid) {
       const vw = window.innerWidth, vh = window.innerHeight;
       let left = x + 16, top = y - 12;
       if (left + 480 > vw) left = x - 488;
+      const ttH = tt.offsetHeight;
+      if (top + ttH > vh - 4) top = y - ttH - 8;
       if (top < 4) top = 4;
       tt.style.left = left + 'px';
       tt.style.top = top + 'px';
@@ -296,8 +298,15 @@ function renderMatrix(tid) {
           <div class="tt-sub" style="margin-top:6px">Position in ranking: #${i+1} of ${nN}</div>
           <div class="tt-sub">Coverage: ${cov} docs (${(cov/nD*100).toFixed(1)}%)</div>`;
         tt.style.display = 'block';
-        tt.style.left = (event.clientX + 12) + 'px';
-        tt.style.top = (event.clientY - 8) + 'px';
+        const ex = event.clientX, ey = event.clientY;
+        const evw = window.innerWidth, evh = window.innerHeight;
+        let eleft = ex + 12, etop = ey - 8;
+        if (eleft + 480 > evw) eleft = ex - 488;
+        const ettH = tt.offsetHeight;
+        if (etop + ettH > evh - 4) etop = ey - ettH - 8;
+        if (etop < 4) etop = 4;
+        tt.style.left = eleft + 'px';
+        tt.style.top = etop + 'px';
       })
       .on('mouseleave', () => { tt.style.display = 'none'; });
   });
