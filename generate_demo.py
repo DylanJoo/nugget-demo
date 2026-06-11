@@ -55,10 +55,13 @@ def load_data():
     return qrel, topics, docs, nugget_info
 
 
+RUN_FILE = DATA_DIR / 'runs.neuclir2024.cover.test.txt'
+
+
 def load_run_data():
     """Load run file and per-doc nugget ratings."""
     runs = defaultdict(list)  # {tid: [(docid, rank, score, run_name)]}
-    with open(DATA_DIR / 'runs.neuclir2024.cover.test.txt') as f:
+    with open(RUN_FILE) as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) >= 6:
@@ -147,7 +150,7 @@ def process_data(qrel, topics, docs, nugget_info, runs, ratings):
     return vis_data
 
 
-def generate_html(vis_data):
+def generate_html(vis_data, run_file_name='unknown'):
     data_json = json.dumps(vis_data, ensure_ascii=False)
 
     return '''<!DOCTYPE html>
@@ -256,7 +259,7 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
     <select id="topic-sel"></select>
     <div class="mode-toggle">
       <button id="mode-rel" class="mode-btn active" onclick="setMode(\'rel\')">Relevant Docs</button>
-      <button id="mode-run" class="mode-btn" onclick="setMode(\'run\')">Run: tevatron</button>
+      <button id="mode-run" class="mode-btn" onclick="setMode(\'run\')">Run: ''' + run_file_name + '''</button>
     </div>
     <label class="opt-label" id="topk-ctrl" style="display:none">
       Top-K&nbsp;
@@ -668,7 +671,7 @@ if __name__ == '__main__':
              for tid, v in vis_data.items()}
     for tid, (nn, nd, nc, nr, nj, nrc) in stats.items():
         print(f'  Topic {tid}: {nn} nuggets × {nd} rel-docs ({nc} pairs) | run: {nr} docs, {nj} judged, {nrc} covered pairs')
-    html = generate_html(vis_data)
+    html = generate_html(vis_data, run_file_name=RUN_FILE.name)
     OUT_FILE.write_text(html, encoding='utf-8')
     size_kb = len(html.encode()) / 1024
     print(f'\nWrote {OUT_FILE}  ({size_kb:.0f} KB)')
