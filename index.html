@@ -238,10 +238,12 @@ function render(tid) {
     const totalRun = d.run_docs.length;
     const judgedInTopK = d.run_rated.slice(0, topK).filter(Boolean).length;
     const coveredCells = d.run_cells.filter(c => c[1] < topK).length;
+    const coveredNuggets = new Set(d.run_cells.filter(c => c[1] < topK).map(c => c[0])).size;
     document.getElementById('stats').innerHTML = `
       <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
       <div class="stat"><div class="stat-val">${Math.min(topK, totalRun)}</div><div class="stat-lbl">Run Docs (top-${topK})</div></div>
       <div class="stat"><div class="stat-val">${judgedInTopK}</div><div class="stat-lbl">Judged in Top-${topK}</div></div>
+      <div class="stat"><div class="stat-val">${coveredNuggets}</div><div class="stat-lbl">Nuggets Covered (top-${topK})</div></div>
       <div class="stat"><div class="stat-val">${coveredCells.toLocaleString()}</div><div class="stat-lbl">Covered Pairs</div></div>`;
   }
 
