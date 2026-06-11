@@ -238,7 +238,7 @@ ul.tt-answers{margin:6px 0 2px 14px;padding:0;list-style:disc}
 ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1px}
 
 /* Axis text */
-.y-label{font-size:10px;fill:#475569;cursor:default}
+.y-label{font-size:10px;cursor:default}
 .y-label:hover{fill:#1d4ed8}
 .x-label{font-size:9px;fill:#94a3b8}
 .axis-title{font-size:10px;fill:#94a3b8;font-weight:600}
@@ -352,15 +352,16 @@ function setMode(mode) {
 
 function updateLegend() {
   const el = document.getElementById('legend');
+  const shared = `
+    <div class="legend-sq" style="background:#34d399"></div><span>OR nugget — covered</span>
+    <div class="legend-sq" style="background:#f87171;margin-left:6px"></div><span>AND nugget — covered</span>
+    <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
   if (viewMode === 'rel') {
-    el.innerHTML = `
-      <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
-      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
+    el.innerHTML = shared;
   } else {
-    el.innerHTML = `
-      <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (judged)</span>
-      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered (judged)</span>
-      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>`;
+    el.innerHTML = shared + `
+      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>
+      <span style="margin-left:10px;font-size:.76rem;color:#94a3b8">· Y-label color: green/red = not yet covered · gray = covered by run</span>`;
   }
 }
 
@@ -525,23 +526,30 @@ function renderMatrix(tid) {
     tt.style.top = top + 'px';
   }
 
+  function cellFill(nugIdx, hover) {
+    const ni = d.nugget_info && d.nugget_info[d.nuggets[nugIdx]];
+    if (!ni) return hover ? '#1d4ed8' : '#3b82f6';
+    if (ni.cond === 'OR') return hover ? '#059669' : '#34d399';
+    return hover ? '#dc2626' : '#f87171';
+  }
+
   g.selectAll('rect.c')
     .data(activeCells)
     .join('rect').attr('class','c')
     .attr('x', c => c[1]*cs).attr('y', c => c[0]*cs)
     .attr('width', Math.max(1, cs-1)).attr('height', Math.max(1, cs-1))
     .attr('rx', cs >= 8 ? 1.5 : 0)
-    .attr('fill', '#3b82f6')
+    .attr('fill', c => cellFill(c[0], false))
     .on('mousemove', function(event, c) {
       rowHL.attr('display',null).attr('y', c[0]*cs);
       colHL.attr('display',null).attr('x', c[1]*cs);
-      d3.select(this).attr('fill','#ef4444');
+      d3.select(this).attr('fill', cellFill(c[0], true));
       showTooltip(event, c[0], c[1], c[2]);
     })
-    .on('mouseleave', function() {
+    .on('mouseleave', function(event, c) {
       rowHL.attr('display','none');
       colHL.attr('display','none');
-      d3.select(this).attr('fill','#3b82f6');
+      d3.select(this).attr('fill', cellFill(c[0], false));
       tt.style.display = 'none';
     });
 
@@ -582,6 +590,12 @@ function renderMatrix(tid) {
       });
   }
 
+  // Build set of nugget indices covered by run docs (for y-label coloring)
+  const coveredNuggetSet = new Set();
+  if (isRun) {
+    d.run_cells.filter(c => c[1] < topK).forEach(c => coveredNuggetSet.add(c[0]));
+  }
+
   // Y-axis labels
   const yG = svg.append('g').attr('transform', `translate(0,${mT})`);
   const showEvery = cs >= 10 ? 1 : cs >= 6 ? 2 : 5;
@@ -591,8 +605,19 @@ function renderMatrix(tid) {
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
     const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
+    let yFill;
+    if (isRun && coveredNuggetSet.has(i)) {
+      yFill = '#d1d5db';
+    } else if (ni && ni.cond === 'OR') {
+      yFill = '#059669';
+    } else if (ni && ni.cond === 'AND') {
+      yFill = '#dc2626';
+    } else {
+      yFill = '#475569';
+    }
     yG.append('text')
       .attr('class','y-label')
+      .attr('fill', yFill)
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))

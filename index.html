@@ -83,12 +83,8 @@ ul.tt-answers{margin:6px 0 2px 14px;padding:0;list-style:disc}
 ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1px}
 
 /* Axis text */
-.y-label{font-size:10px;fill:#475569;cursor:default}
+.y-label{font-size:10px;cursor:default}
 .y-label:hover{fill:#1d4ed8}
-.y-label-covered{fill:#10b981 !important;font-weight:600}
-.y-label-covered:hover{fill:#059669 !important}
-.y-label-uncovered{fill:#94a3b8 !important}
-.y-label-uncovered:hover{fill:#64748b !important}
 .x-label{font-size:9px;fill:#94a3b8}
 .axis-title{font-size:10px;fill:#94a3b8;font-weight:600}
 </style>
@@ -201,21 +197,16 @@ function setMode(mode) {
 
 function updateLegend() {
   const el = document.getElementById('legend');
+  const shared = `
+    <div class="legend-sq" style="background:#34d399"></div><span>OR nugget — covered</span>
+    <div class="legend-sq" style="background:#f87171;margin-left:6px"></div><span>AND nugget — covered</span>
+    <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
   if (viewMode === 'rel') {
-    el.innerHTML = `
-      <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
-      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>
-      <span style="margin-left:10px;color:#ef4444;font-weight:700;font-size:.78rem">A</span><span style="margin-left:3px">AND nugget</span>
-      <span style="margin-left:8px;color:#10b981;font-weight:700;font-size:.78rem">O</span><span style="margin-left:3px">OR nugget</span>`;
+    el.innerHTML = shared;
   } else {
-    el.innerHTML = `
-      <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (judged)</span>
-      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered (judged)</span>
+    el.innerHTML = shared + `
       <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>
-      <span style="margin-left:10px;color:#10b981;font-weight:600;font-size:.78rem">&#9632;</span><span style="margin-left:3px">Nugget covered by top-k</span>
-      <span style="margin-left:8px;color:#94a3b8;font-size:.78rem">&#9632;</span><span style="margin-left:3px">Not covered</span>
-      <span style="margin-left:10px;color:#ef4444;font-weight:700;font-size:.78rem">A</span><span style="margin-left:3px">AND nugget</span>
-      <span style="margin-left:8px;color:#10b981;font-weight:700;font-size:.78rem">O</span><span style="margin-left:3px">OR nugget</span>`;
+      <span style="margin-left:10px;font-size:.76rem;color:#94a3b8">· Y-label color: green/red = not yet covered · gray = covered by run</span>`;
   }
 }
 
@@ -246,14 +237,11 @@ function render(tid) {
     const topK = +document.getElementById('topk-sel').value;
     const totalRun = d.run_docs.length;
     const judgedInTopK = d.run_rated.slice(0, topK).filter(Boolean).length;
-    const topKCells = d.run_cells.filter(c => c[1] < topK);
-    const coveredCells = topKCells.length;
-    const coveredNuggetCount = new Set(topKCells.map(c => c[0])).size;
+    const coveredCells = d.run_cells.filter(c => c[1] < topK).length;
     document.getElementById('stats').innerHTML = `
       <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
       <div class="stat"><div class="stat-val">${Math.min(topK, totalRun)}</div><div class="stat-lbl">Run Docs (top-${topK})</div></div>
       <div class="stat"><div class="stat-val">${judgedInTopK}</div><div class="stat-lbl">Judged in Top-${topK}</div></div>
-      <div class="stat" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);border-color:#6ee7b7"><div class="stat-val" style="color:#059669">${coveredNuggetCount}</div><div class="stat-lbl" style="color:#10b981">Nuggets Covered</div></div>
       <div class="stat"><div class="stat-val">${coveredCells.toLocaleString()}</div><div class="stat-lbl">Covered Pairs</div></div>`;
   }
 
@@ -324,8 +312,6 @@ function renderMatrix(tid) {
     ? d.run_cells.filter(c => c[1] < topK)
     : d.cells;
 
-  const coveredNuggetIdxs = isRun ? new Set(activeCells.map(c => c[0])) : null;
-
   function showTooltip(event, nugIdx, docIdx, label) {
     const nugId = d.nuggets[nugIdx];
     const docId = activeDocs[docIdx];
@@ -385,23 +371,30 @@ function renderMatrix(tid) {
     tt.style.top = top + 'px';
   }
 
+  function cellFill(nugIdx, hover) {
+    const ni = d.nugget_info && d.nugget_info[d.nuggets[nugIdx]];
+    if (!ni) return hover ? '#1d4ed8' : '#3b82f6';
+    if (ni.cond === 'OR') return hover ? '#059669' : '#34d399';
+    return hover ? '#dc2626' : '#f87171';
+  }
+
   g.selectAll('rect.c')
     .data(activeCells)
     .join('rect').attr('class','c')
     .attr('x', c => c[1]*cs).attr('y', c => c[0]*cs)
     .attr('width', Math.max(1, cs-1)).attr('height', Math.max(1, cs-1))
     .attr('rx', cs >= 8 ? 1.5 : 0)
-    .attr('fill', '#3b82f6')
+    .attr('fill', c => cellFill(c[0], false))
     .on('mousemove', function(event, c) {
       rowHL.attr('display',null).attr('y', c[0]*cs);
       colHL.attr('display',null).attr('x', c[1]*cs);
-      d3.select(this).attr('fill','#ef4444');
+      d3.select(this).attr('fill', cellFill(c[0], true));
       showTooltip(event, c[0], c[1], c[2]);
     })
-    .on('mouseleave', function() {
+    .on('mouseleave', function(event, c) {
       rowHL.attr('display','none');
       colHL.attr('display','none');
-      d3.select(this).attr('fill','#3b82f6');
+      d3.select(this).attr('fill', cellFill(c[0], false));
       tt.style.display = 'none';
     });
 
@@ -442,6 +435,12 @@ function renderMatrix(tid) {
       });
   }
 
+  // Build set of nugget indices covered by run docs (for y-label coloring)
+  const coveredNuggetSet = new Set();
+  if (isRun) {
+    d.run_cells.filter(c => c[1] < topK).forEach(c => coveredNuggetSet.add(c[0]));
+  }
+
   // Y-axis labels
   const yG = svg.append('g').attr('transform', `translate(0,${mT})`);
   const showEvery = cs >= 10 ? 1 : cs >= 6 ? 2 : 5;
@@ -450,34 +449,24 @@ function renderMatrix(tid) {
     const y = i * cs + cs / 2;
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
-    const covClass = isRun
-      ? (coveredNuggetIdxs.has(i) ? ' y-label-covered' : ' y-label-uncovered')
-      : '';
-
-    // AND/OR condition color strip at left edge
-    if (ni) {
-      const condColor = ni.cond === 'OR' ? '#10b981' : '#ef4444';
-      yG.append('rect')
-        .attr('x', 1).attr('y', i * cs)
-        .attr('width', 4).attr('height', Math.max(1, cs - 1))
-        .attr('fill', condColor).attr('rx', 1).attr('pointer-events', 'none');
+    const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
+    let yFill;
+    if (isRun && coveredNuggetSet.has(i)) {
+      yFill = '#d1d5db';
+    } else if (ni && ni.cond === 'OR') {
+      yFill = '#059669';
+    } else if (ni && ni.cond === 'AND') {
+      yFill = '#dc2626';
+    } else {
+      yFill = '#475569';
     }
-
-    const textEl = yG.append('text')
-      .attr('class', `y-label${covClass}`)
+    yG.append('text')
+      .attr('class','y-label')
+      .attr('fill', yFill)
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
-      .attr('font-size', Math.min(10, cs));
-
-    if (ni) {
-      const condColor = ni.cond === 'OR' ? '#10b981' : '#ef4444';
-      textEl.append('tspan').attr('fill', condColor).attr('font-weight', '700')
-        .text(ni.cond === 'OR' ? 'O ' : 'A ');
-      textEl.append('tspan').text(`#${nid} (${cov})`);
-    } else {
-      textEl.text(`#${nid} (${cov})`);
-    }
-    textEl
+      .attr('font-size', Math.min(10, cs))
+      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
