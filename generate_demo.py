@@ -7,6 +7,7 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).parent / 'data' / 'neuclir'
 OUT_FILE = Path(__file__).parent / 'index.html'
+DOCS_FILE = Path(__file__).parent / 'docs.json'
 
 
 def load_data():
@@ -35,8 +36,6 @@ def load_data():
                     'text': d.get('text', '')[:3000],
                 }
 
-    # nugget_info[tid][nugget_id_str] = {question, answers, cond}
-    # cond "OR" = list of acceptable answers; "AND" = single specific answer
     nugget_info = {}
     with open(DATA_DIR / 'neuclir24.nuggets.human.jsonl') as f:
         for line in f:
@@ -56,7 +55,26 @@ def load_data():
     return qrel, topics, docs, nugget_info
 
 
-def process_data(qrel, topics, docs, nugget_info):
+def load_run_data():
+    """Load tevatron run and per-doc nugget ratings."""
+    runs = defaultdict(list)  # {tid: [(docid, rank, score)]}
+    with open(DATA_DIR / 'runs.neuclir2024.cover.test.txt') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                runs[parts[0]].append((parts[2], int(parts[3]), float(parts[4])))
+
+    ratings = defaultdict(dict)  # {tid: {docid: rating_array}}
+    with open(DATA_DIR / 'neuclir24.ratings.human.jsonl') as f:
+        for line in f:
+            if line.strip():
+                d = json.loads(line)
+                ratings[str(d['id'])][d['docid']] = d['rating']
+
+    return runs, ratings
+
+
+def process_data(qrel, topics, docs, nugget_info, runs, ratings):
     vis_data = {}
     for tid in sorted(topics.keys()):
         if tid not in qrel:
@@ -82,6 +100,29 @@ def process_data(qrel, topics, docs, nugget_info):
 
         tinfo = nugget_info.get(tid, {})
 
+        # Build run data (sorted by retrieval rank)
+        run_list = sorted(runs.get(tid, []), key=lambda x: x[1])
+        run_ratings = ratings.get(tid, {})
+
+        run_docs_list = [docid for docid, _, _ in run_list]
+        run_scores_list = [round(score, 6) for _, _, score in run_list]
+        run_rated_list = [docid in run_ratings for docid in run_docs_list]
+        run_cov_list = []
+        run_cells_list = []
+
+        for i, docid in enumerate(run_docs_list):
+            if docid in run_ratings:
+                rating_arr = run_ratings[docid]
+                cov = 0
+                for j, nid in enumerate(sorted_nuggets):
+                    nidx_0 = int(nid) - 1
+                    if nidx_0 < len(rating_arr) and rating_arr[nidx_0] == 3:
+                        run_cells_list.append([j, i, 3])
+                        cov += 1
+                run_cov_list.append(cov)
+            else:
+                run_cov_list.append(-1)
+
         vis_data[tid] = {
             'title': topics[tid]['title'],
             'background': topics[tid].get('background', ''),
@@ -91,8 +132,13 @@ def process_data(qrel, topics, docs, nugget_info):
             'nugget_info': tinfo,
             'docs': sorted_docs,
             'doc_cov': dict(doc_cov),
-            'doc_info': {d: docs.get(d, {'title': '?', 'text': ''}) for d in sorted_docs},
             'cells': cells,
+            # run mode data
+            'run_docs': run_docs_list,
+            'run_scores': run_scores_list,
+            'run_rated': run_rated_list,
+            'run_cov': run_cov_list,
+            'run_cells': run_cells_list,
         }
 
     return vis_data
@@ -110,7 +156,7 @@ def generate_html(vis_data):
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f2f5;color:#1e293b;min-height:100vh}
+body{font-family:\'Segoe UI\',system-ui,sans-serif;background:#f0f2f5;color:#1e293b;min-height:100vh}
 
 /* Header */
 header{background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 100%);color:#fff;padding:18px 28px;display:flex;align-items:center;gap:16px;box-shadow:0 2px 8px rgba(0,0,0,.3)}
@@ -127,8 +173,15 @@ header .subtitle{font-size:.82rem;opacity:.6;margin-top:3px}
 /* Controls row */
 .controls{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 .controls label{font-weight:600;font-size:.85rem;color:#475569}
-select{padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:.88rem;background:#fff;cursor:pointer;color:#1e293b;min-width:280px;outline:none}
+select{padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:.88rem;background:#fff;cursor:pointer;color:#1e293b;outline:none}
 select:focus{border-color:#3b82f6}
+#topic-sel{min-width:280px}
+
+/* Mode toggle */
+.mode-toggle{display:flex;border:1.5px solid #e2e8f0;border-radius:7px;overflow:hidden}
+.mode-btn{padding:6px 14px;font-size:.82rem;font-weight:600;cursor:pointer;border:none;background:#fff;color:#64748b;transition:background .15s,color .15s}
+.mode-btn.active{background:#1d4ed8;color:#fff}
+.mode-btn:not(.active):hover{background:#eff6ff;color:#1d4ed8}
 
 /* Topic info */
 .topic-title{font-size:1.15rem;font-weight:700;color:#0f172a;margin-bottom:12px}
@@ -150,8 +203,8 @@ select:focus{border-color:#3b82f6}
 .matrix-opts input[type=range]{width:90px;accent-color:#3b82f6;cursor:pointer}
 .matrix-hint{font-size:.78rem;color:#94a3b8;margin-bottom:12px}
 
-.legend{display:flex;align-items:center;gap:8px;font-size:.78rem;color:#64748b}
-.legend-sq{width:13px;height:13px;border-radius:2px}
+.legend{display:flex;align-items:center;gap:8px;font-size:.78rem;color:#64748b;flex-wrap:wrap}
+.legend-sq{width:13px;height:13px;border-radius:2px;flex-shrink:0}
 
 #matrix-wrap{overflow:auto;border:1px solid #e2e8f0;border-radius:6px;background:#fafafa;cursor:crosshair}
 #matrix-svg{display:block}
@@ -174,6 +227,7 @@ select:focus{border-color:#3b82f6}
 .badge-blue{display:inline-block;background:#1d4ed8;color:#bfdbfe;padding:1px 7px;border-radius:10px;font-size:.72rem;font-weight:600;margin-left:5px}
 .badge-or{display:inline-block;background:#065f46;color:#6ee7b7;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
 .badge-and{display:inline-block;background:#7c2d12;color:#fca5a5;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
+.badge-grey{display:inline-block;background:#475569;color:#cbd5e1;padding:1px 6px;border-radius:10px;font-size:.68rem;font-weight:700;margin-left:4px}
 ul.tt-answers{margin:6px 0 2px 14px;padding:0;list-style:disc}
 ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1px}
 
@@ -197,6 +251,21 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
   <div class="card controls">
     <label for="topic-sel">Topic</label>
     <select id="topic-sel"></select>
+    <div class="mode-toggle">
+      <button id="mode-rel" class="mode-btn active" onclick="setMode(\'rel\')">Relevant Docs</button>
+      <button id="mode-run" class="mode-btn" onclick="setMode(\'run\')">Run: tevatron</button>
+    </div>
+    <label class="opt-label" id="topk-ctrl" style="display:none">
+      Top-K&nbsp;
+      <select id="topk-sel" onchange="render(document.getElementById(\'topic-sel\').value)">
+        <option value="20">20</option>
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+        <option value="1000">1000</option>
+      </select>
+    </label>
   </div>
 
   <div class="card" id="topic-info"></div>
@@ -207,7 +276,7 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
     <div class="matrix-header">
       <h2>Coverage Matrix</h2>
       <div class="matrix-opts">
-        <div class="legend">
+        <div class="legend" id="legend">
           <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
           <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>
         </div>
@@ -218,7 +287,7 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
         </label>
       </div>
     </div>
-    <p class="matrix-hint">
+    <p class="matrix-hint" id="matrix-hint">
       Y-axis: nuggets sorted by coverage (most covered first) &nbsp;·&nbsp;
       X-axis: documents sorted by nuggets covered (most first) &nbsp;·&nbsp;
       Hover any cell for details
@@ -237,6 +306,15 @@ const DATA = ''' + data_json + ''';
 
 const topicIds = Object.keys(DATA).sort((a,b)=>+a-+b);
 let cellSize = 12;
+let viewMode = 'rel';
+let docsCache = null;
+
+// Load docs.json in the background for tooltip text
+fetch('docs.json').then(r => r.json()).then(d => { docsCache = d; }).catch(() => {});
+
+function getDoc(docId) {
+  return (docsCache && docsCache[docId]) || {title: docId, text: ''};
+}
 
 // Populate selector
 const sel = document.getElementById('topic-sel');
@@ -257,6 +335,29 @@ slider.addEventListener('input', () => {
   render(sel.value);
 });
 
+function setMode(mode) {
+  viewMode = mode;
+  document.getElementById('mode-rel').classList.toggle('active', mode === 'rel');
+  document.getElementById('mode-run').classList.toggle('active', mode === 'run');
+  document.getElementById('topk-ctrl').style.display = mode === 'run' ? '' : 'none';
+  updateLegend();
+  render(sel.value);
+}
+
+function updateLegend() {
+  const el = document.getElementById('legend');
+  if (viewMode === 'rel') {
+    el.innerHTML = `
+      <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
+      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
+  } else {
+    el.innerHTML = `
+      <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (judged)</span>
+      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered (judged)</span>
+      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>`;
+  }
+}
+
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') }
 
 function render(tid) {
@@ -271,32 +372,61 @@ function render(tid) {
     </div>`;
 
   // Stats
-  const nN = d.nuggets.length, nD = d.docs.length, nC = d.cells.length;
-  const density = (nC / (nN * nD) * 100).toFixed(1);
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
-    <div class="stat"><div class="stat-val">${nD}</div><div class="stat-lbl">Documents</div></div>
-    <div class="stat"><div class="stat-val">${nC.toLocaleString()}</div><div class="stat-lbl">Annotated Pairs</div></div>
-    <div class="stat"><div class="stat-val">${density}%</div><div class="stat-lbl">Matrix Density</div></div>`;
+  const nN = d.nuggets.length;
+  if (viewMode === 'rel') {
+    const nD = d.docs.length, nC = d.cells.length;
+    const density = (nC / (nN * nD) * 100).toFixed(1);
+    document.getElementById('stats').innerHTML = `
+      <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
+      <div class="stat"><div class="stat-val">${nD}</div><div class="stat-lbl">Relevant Docs</div></div>
+      <div class="stat"><div class="stat-val">${nC.toLocaleString()}</div><div class="stat-lbl">Annotated Pairs</div></div>
+      <div class="stat"><div class="stat-val">${density}%</div><div class="stat-lbl">Matrix Density</div></div>`;
+  } else {
+    const topK = +document.getElementById('topk-sel').value;
+    const totalRun = d.run_docs.length;
+    const judgedInTopK = d.run_rated.slice(0, topK).filter(Boolean).length;
+    const coveredCells = d.run_cells.filter(c => c[1] < topK).length;
+    document.getElementById('stats').innerHTML = `
+      <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
+      <div class="stat"><div class="stat-val">${Math.min(topK, totalRun)}</div><div class="stat-lbl">Run Docs (top-${topK})</div></div>
+      <div class="stat"><div class="stat-val">${judgedInTopK}</div><div class="stat-lbl">Judged in Top-${topK}</div></div>
+      <div class="stat"><div class="stat-val">${coveredCells.toLocaleString()}</div><div class="stat-lbl">Covered Pairs</div></div>`;
+  }
+
+  // Hint
+  const hint = document.getElementById('matrix-hint');
+  if (viewMode === 'rel') {
+    hint.textContent = 'Y-axis: nuggets sorted by coverage (most covered first) · X-axis: documents sorted by nuggets covered (most first) · Hover any cell for details';
+  } else {
+    const topK = +document.getElementById('topk-sel').value;
+    hint.textContent = `Y-axis: nuggets (sorted by relevant-doc coverage) · X-axis: top-${topK} run documents in retrieval rank order · Grey columns = unjudged`;
+  }
 
   renderMatrix(tid);
 }
 
 function renderMatrix(tid) {
   const d = DATA[tid];
-  const nN = d.nuggets.length, nD = d.docs.length;
+  const nN = d.nuggets.length;
   const cs = cellSize;
   const mL = 82, mT = 36, mR = 20, mB = 28;
+  const tt = document.getElementById('tooltip');
+
+  const isRun = viewMode === 'run';
+  const topK = isRun ? Math.min(+document.getElementById('topk-sel').value, d.run_docs.length) : 0;
+
+  const activeDocs = isRun ? d.run_docs.slice(0, topK) : d.docs;
+  const nD = activeDocs.length;
+
   const W = nD * cs + mL + mR;
   const H = nN * cs + mT + mB;
 
-  const svg = d3.select('#matrix-svg')
-    .attr('width', W).attr('height', H);
+  const svg = d3.select('#matrix-svg').attr('width', W).attr('height', H);
   svg.selectAll('*').remove();
 
   const g = svg.append('g').attr('transform', `translate(${mL},${mT})`);
 
-  // Row/col highlight rects (drawn first, behind cells)
+  // Row/col highlight rects
   const rowHL = g.append('rect')
     .attr('fill', 'rgba(59,130,246,.08)').attr('pointer-events','none').attr('display','none')
     .attr('x', 0).attr('width', nD * cs).attr('height', cs);
@@ -304,64 +434,103 @@ function renderMatrix(tid) {
     .attr('fill', 'rgba(59,130,246,.08)').attr('pointer-events','none').attr('display','none')
     .attr('y', 0).attr('height', nN * cs).attr('width', cs);
 
-  // Subtle grid lines every 10
+  // Grid lines every 10
   const gridG = g.append('g').attr('class','grid');
-  for (let i = 10; i < nN; i += 10) {
+  for (let i = 10; i < nN; i += 10)
     gridG.append('line').attr('x1',0).attr('x2',nD*cs).attr('y1',i*cs).attr('y2',i*cs)
       .attr('stroke','#e2e8f0').attr('stroke-width',.5);
-  }
-  for (let i = 10; i < nD; i += 10) {
+  for (let i = 10; i < nD; i += 10)
     gridG.append('line').attr('x1',i*cs).attr('x2',i*cs).attr('y1',0).attr('y2',nN*cs)
       .attr('stroke','#e2e8f0').attr('stroke-width',.5);
+
+  // For run mode: grey background for unjudged columns
+  if (isRun) {
+    for (let i = 0; i < topK; i++) {
+      if (!d.run_rated[i]) {
+        g.append('rect')
+          .attr('x', i * cs).attr('y', 0)
+          .attr('width', cs).attr('height', nN * cs)
+          .attr('fill', '#e8ecf0').attr('pointer-events', 'none');
+      }
+    }
   }
 
   // Cells
-  const tt = document.getElementById('tooltip');
+  const activeCells = isRun
+    ? d.run_cells.filter(c => c[1] < topK)
+    : d.cells;
+
+  function showTooltip(event, nugIdx, docIdx, label) {
+    const nugId = d.nuggets[nugIdx];
+    const docId = activeDocs[docIdx];
+    const nCov = d.nugget_cov[nugId];
+    const ni = d.nugget_info && d.nugget_info[nugId];
+
+    const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
+    const answersHtml = ni
+      ? `<ul class="tt-answers">${ni.answers.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
+      : '';
+
+    const di = getDoc(docId);
+
+    let docSection = '';
+    if (isRun) {
+      const rank = docIdx + 1;
+      const score = d.run_scores[docIdx] !== undefined ? d.run_scores[docIdx].toFixed(4) : '—';
+      const isJudged = d.run_rated[docIdx];
+      const cov = d.run_cov[docIdx];
+      const covText = isJudged ? `Covers <strong>${cov}</strong> nugget${cov!==1?'s':''} (judged)` : '<span class="badge-grey">UNJUDGED</span>';
+      docSection = `
+        <div class="tt-section">
+          <div class="tt-tag">Run Doc — Rank #${rank} &nbsp;·&nbsp; Score: ${score}</div>
+          <div class="tt-title">${di.title ? esc(di.title) : esc(docId)}</div>
+          ${di.text ? `<div class="tt-text">${esc(di.text.substring(0,1500))}${di.text.length>1500?'…':''}</div>` : '<div class="tt-sub" style="margin-top:4px">No text available</div>'}
+          <div class="tt-sub" style="margin-top:6px">${covText}</div>
+          <div class="tt-id">${docId}</div>
+        </div>`;
+    } else {
+      const dCov = d.doc_cov[docId];
+      docSection = `
+        <div class="tt-section">
+          <div class="tt-tag">Document</div>
+          <div class="tt-title">${di.title ? esc(di.title) : esc(docId)}</div>
+          ${di.text ? `<div class="tt-text">${esc(di.text.substring(0,2000))}${di.text.length>2000?'…':''}</div>` : ''}
+          <div class="tt-sub" style="margin-top:6px">Covers <strong>${dCov}</strong> nugget${dCov!==1?'s':''} in this topic</div>
+          <div class="tt-id">${docId}</div>
+        </div>`;
+    }
+
+    tt.innerHTML = `
+      <div class="tt-tag">Nugget #${esc(nugId)} ${condBadge}<span class="badge-blue" style="margin-left:4px">${nCov} docs</span></div>
+      <div class="tt-title">${ni ? esc(ni.question) : 'Nugget #' + esc(nugId)}</div>
+      ${answersHtml}
+      <div class="tt-sub" style="margin-top:4px">Covered by ${nCov} of ${d.docs.length} relevant docs (${(nCov/d.docs.length*100).toFixed(0)}%)</div>
+      ${docSection}`;
+    tt.style.display = 'block';
+
+    const x = event.clientX, y = event.clientY;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let left = x + 16, top = y - 12;
+    if (left + 480 > vw) left = x - 488;
+    if (top < 4) top = 4;
+    const ttH = tt.scrollHeight;
+    if (top + ttH > vh - 8) top = Math.max(4, vh - ttH - 8);
+    tt.style.left = left + 'px';
+    tt.style.top = top + 'px';
+  }
 
   g.selectAll('rect.c')
-    .data(d.cells)
+    .data(activeCells)
     .join('rect').attr('class','c')
     .attr('x', c => c[1]*cs).attr('y', c => c[0]*cs)
     .attr('width', Math.max(1, cs-1)).attr('height', Math.max(1, cs-1))
     .attr('rx', cs >= 8 ? 1.5 : 0)
     .attr('fill', '#3b82f6')
     .on('mousemove', function(event, c) {
-      const nugId = d.nuggets[c[0]];
-      const docId = d.docs[c[1]];
-      const di = d.doc_info[docId] || {title:'?', text:''};
-      const nCov = d.nugget_cov[nugId];
-      const dCov = d.doc_cov[docId];
-      const ni = d.nugget_info && d.nugget_info[nugId];
-
       rowHL.attr('display',null).attr('y', c[0]*cs);
       colHL.attr('display',null).attr('x', c[1]*cs);
       d3.select(this).attr('fill','#ef4444');
-
-      const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
-      const answersHtml = ni
-        ? `<ul class="tt-answers">${ni.answers.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`
-        : '';
-      tt.innerHTML = `
-        <div class="tt-tag">Nugget #${esc(nugId)} ${condBadge}<span class="badge-blue" style="margin-left:4px">${nCov} docs</span></div>
-        <div class="tt-title">${ni ? esc(ni.question) : 'Nugget #' + esc(nugId)}</div>
-        ${answersHtml}
-        <div class="tt-sub" style="margin-top:4px">Covered by ${nCov} of ${nD} documents (${(nCov/nD*100).toFixed(0)}%)</div>
-        <div class="tt-section">
-          <div class="tt-tag">Document</div>
-          <div class="tt-title">${esc(di.title)}</div>
-          <div class="tt-text">${esc((di.text||'').substring(0,2000))}${di.text && di.text.length>2000?'…':''}</div>
-          <div class="tt-sub" style="margin-top:6px">Covers <strong>${dCov}</strong> nugget${dCov!==1?'s':''} in this topic</div>
-          <div class="tt-id">${docId}</div>
-        </div>`;
-      tt.style.display = 'block';
-
-      const x = event.clientX, y = event.clientY;
-      const vw = window.innerWidth, vh = window.innerHeight;
-      let left = x + 16, top = y - 12;
-      if (left + 480 > vw) left = x - 488;
-      if (top < 4) top = 4;
-      tt.style.left = left + 'px';
-      tt.style.top = top + 'px';
+      showTooltip(event, c[0], c[1], c[2]);
     })
     .on('mouseleave', function() {
       rowHL.attr('display','none');
@@ -369,6 +538,43 @@ function renderMatrix(tid) {
       d3.select(this).attr('fill','#3b82f6');
       tt.style.display = 'none';
     });
+
+  // One full-height transparent rect per unjudged run column for hover
+  if (isRun) {
+    const unjudgedCols = [];
+    for (let i = 0; i < topK; i++) { if (!d.run_rated[i]) unjudgedCols.push(i); }
+    g.selectAll('rect.u')
+      .data(unjudgedCols)
+      .join('rect').attr('class','u')
+      .attr('x', i => i*cs).attr('y', 0)
+      .attr('width', Math.max(1, cs-1)).attr('height', nN * cs)
+      .attr('fill', 'transparent')
+      .on('mousemove', function(event, i) {
+        colHL.attr('display',null).attr('x', i*cs);
+        const docId = d.run_docs[i];
+        const rank = i + 1;
+        const score = d.run_scores[i] !== undefined ? d.run_scores[i].toFixed(4) : '—';
+        const di = getDoc(docId);
+        tt.innerHTML = `
+          <div class="tt-tag">Run Doc — Rank #${rank} &nbsp;·&nbsp; Score: ${score}</div>
+          <div class="tt-title">${di.title ? esc(di.title) : esc(docId)}</div>
+          ${di.text ? `<div class="tt-text">${esc(di.text.substring(0,1500))}${di.text.length>1500?'…':''}</div>` : '<div class="tt-sub" style="margin-top:4px">No text available</div>'}
+          <div class="tt-sub" style="margin-top:6px"><span class="badge-grey">UNJUDGED</span></div>
+          <div class="tt-id">${docId}</div>`;
+        tt.style.display = 'block';
+        const vw = window.innerWidth, vh = window.innerHeight;
+        let left = event.clientX + 16, top = event.clientY - 12;
+        if (left + 480 > vw) left = event.clientX - 488;
+        if (top < 4) top = 4;
+        const ttH = tt.scrollHeight;
+        if (top + ttH > vh - 8) top = Math.max(4, vh - ttH - 8);
+        tt.style.left = left + 'px'; tt.style.top = top + 'px';
+      })
+      .on('mouseleave', function() {
+        colHL.attr('display','none');
+        tt.style.display = 'none';
+      });
+  }
 
   // Y-axis labels
   const yG = svg.append('g').attr('transform', `translate(0,${mT})`);
@@ -395,10 +601,16 @@ function renderMatrix(tid) {
           <div class="tt-title">${ni ? esc(ni.question) : esc(nid)}</div>
           ${answersHtml}
           <div class="tt-sub" style="margin-top:6px">Position in ranking: #${i+1} of ${nN}</div>
-          <div class="tt-sub">Coverage: ${cov} docs (${(cov/nD*100).toFixed(1)}%)</div>`;
+          <div class="tt-sub">Coverage: ${cov} docs (${(cov/d.docs.length*100).toFixed(1)}%)</div>`;
         tt.style.display = 'block';
-        tt.style.left = (event.clientX + 12) + 'px';
-        tt.style.top = (event.clientY - 8) + 'px';
+        const vw = window.innerWidth, vh = window.innerHeight;
+        let left = event.clientX + 12, top = event.clientY - 8;
+        if (left + 480 > vw) left = event.clientX - 488;
+        if (top < 4) top = 4;
+        const ttH = tt.scrollHeight;
+        if (top + ttH > vh - 8) top = Math.max(4, vh - ttH - 8);
+        tt.style.left = left + 'px';
+        tt.style.top = top + 'px';
       })
       .on('mouseleave', () => { tt.style.display = 'none'; });
   });
@@ -409,7 +621,7 @@ function renderMatrix(tid) {
     .attr('text-anchor','middle')
     .text('Nugget ID (# docs covered)');
 
-  // X-axis: show index every ~20 cols
+  // X-axis labels
   const xG = svg.append('g').attr('transform', `translate(${mL},${mT})`);
   const xStep = Math.max(5, Math.ceil(30 / cs) * 5);
   for (let i = 0; i < nD; i += xStep) {
@@ -420,10 +632,13 @@ function renderMatrix(tid) {
   }
 
   // X-axis title
+  const xTitle = isRun
+    ? `Run docs (top-${topK}, sorted by retrieval rank)`
+    : `Documents (${nD} total, sorted by nugget coverage ↓)`;
   svg.append('text').attr('class','axis-title')
     .attr('x', mL + nD*cs/2).attr('y', H - 4)
     .attr('text-anchor','middle')
-    .text(`Documents (${nD} total, sorted by nugget coverage ↓)`);
+    .text(xTitle);
 }
 
 // Initial render
@@ -434,15 +649,27 @@ render(topicIds[0]);
 '''
 
 
+def generate_docs_json(docs):
+    """Write all document texts to a separate docs.json file."""
+    return json.dumps(docs, ensure_ascii=False)
+
+
 if __name__ == '__main__':
     print('Loading data...')
     qrel, topics, docs, nugget_info = load_data()
+    runs, ratings = load_run_data()
     print('Processing...')
-    vis_data = process_data(qrel, topics, docs, nugget_info)
-    stats = {tid: (len(v['nuggets']), len(v['docs']), len(v['cells'])) for tid, v in vis_data.items()}
-    for tid, (nn, nd, nc) in stats.items():
-        print(f'  Topic {tid}: {nn} nuggets × {nd} docs = {nc} pairs')
+    vis_data = process_data(qrel, topics, docs, nugget_info, runs, ratings)
+    stats = {tid: (len(v['nuggets']), len(v['docs']), len(v['cells']),
+                   len(v['run_docs']), sum(v['run_rated']), len(v['run_cells']))
+             for tid, v in vis_data.items()}
+    for tid, (nn, nd, nc, nr, nj, nrc) in stats.items():
+        print(f'  Topic {tid}: {nn} nuggets × {nd} rel-docs ({nc} pairs) | run: {nr} docs, {nj} judged, {nrc} covered pairs')
     html = generate_html(vis_data)
     OUT_FILE.write_text(html, encoding='utf-8')
     size_kb = len(html.encode()) / 1024
     print(f'\nWrote {OUT_FILE}  ({size_kb:.0f} KB)')
+    docs_json = generate_docs_json(docs)
+    DOCS_FILE.write_text(docs_json, encoding='utf-8')
+    docs_kb = len(docs_json.encode()) / 1024
+    print(f'Wrote {DOCS_FILE}  ({docs_kb:.0f} KB)')
