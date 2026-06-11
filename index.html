@@ -441,7 +441,7 @@ function renderMatrix(tid) {
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
+      .text(cs >= 10 ? `#${nid} (${cov})` : `(${cov})`)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
