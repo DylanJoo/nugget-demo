@@ -435,13 +435,12 @@ function renderMatrix(tid) {
     const y = i * cs + cs / 2;
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
-    const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
     yG.append('text')
       .attr('class','y-label')
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
+      .text(`#${nid} (${cov})`)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
