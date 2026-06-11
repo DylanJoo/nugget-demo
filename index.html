@@ -83,8 +83,11 @@ ul.tt-answers{margin:6px 0 2px 14px;padding:0;list-style:disc}
 ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1px}
 
 /* Axis text */
-.y-label{font-size:10px;fill:#475569;cursor:default}
-.y-label:hover{fill:#1d4ed8}
+.y-label{font-size:10px;cursor:default}
+.y-label:hover{fill:#1d4ed8 !important}
+.y-label-or{fill:#059669}
+.y-label-and{fill:#b91c1c}
+.y-label-none{fill:#475569}
 .x-label{font-size:9px;fill:#94a3b8}
 .axis-title{font-size:10px;fill:#94a3b8;font-weight:600}
 </style>
@@ -104,8 +107,9 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
     <select id="topic-sel"></select>
     <div class="mode-toggle">
       <button id="mode-rel" class="mode-btn active" onclick="setMode('rel')">Relevant Docs</button>
-      <button id="mode-run" class="mode-btn" onclick="setMode('run')">Run: tevatron</button>
+      <button id="mode-run" class="mode-btn" onclick="onRunSelect(activeRun || RUN_NAMES[0])">Run</button>
     </div>
+    <select id="run-sel" onchange="onRunSelect(this.value)" style="display:none"></select>
     <label class="opt-label" id="topk-ctrl" style="display:none">
       Top-K&nbsp;
       <select id="topk-sel" onchange="render(document.getElementById('topic-sel').value)">
@@ -130,6 +134,8 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
         <div class="legend" id="legend">
           <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
           <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>
+          <span style="margin-left:10px;color:#059669;font-weight:700">■</span><span style="margin-left:4px">OR nugget</span>
+          <span style="margin-left:10px;color:#b91c1c;font-weight:700">■</span><span style="margin-left:4px">AND nugget</span>
         </div>
         <label class="opt-label">
           Cell size&nbsp;
@@ -158,6 +164,21 @@ const DATA = {"300": {"title": "Japan suicide rate COVID-19", "background": "I a
 const topicIds = Object.keys(DATA).sort((a,b)=>+a-+b);
 let cellSize = 12;
 let viewMode = 'rel';
+let activeRun = null;
+
+// Collect unique run names from the data (fall back to filename-derived name)
+const RUN_NAMES = (() => {
+  const names = new Set();
+  Object.values(DATA).forEach(d => { if (d.run_name) names.add(d.run_name); });
+  return names.size ? [...names] : ['tevatron'];
+})();
+
+// Populate run selector
+(function initRunSel() {
+  const sel = document.getElementById('run-sel');
+  sel.innerHTML = '<option value="">— select run —</option>' +
+    RUN_NAMES.map(n => `<option value="${n}">${n}</option>`).join('');
+})();
 let docsCache = null;
 
 // Load docs.json in the background for tooltip text
@@ -186,11 +207,21 @@ slider.addEventListener('input', () => {
   render(sel.value);
 });
 
+function onRunSelect(name) {
+  if (!name) { setMode('rel'); return; }
+  activeRun = name;
+  setMode('run');
+}
+
 function setMode(mode) {
   viewMode = mode;
+  const runSel = document.getElementById('run-sel');
   document.getElementById('mode-rel').classList.toggle('active', mode === 'rel');
   document.getElementById('mode-run').classList.toggle('active', mode === 'run');
   document.getElementById('topk-ctrl').style.display = mode === 'run' ? '' : 'none';
+  runSel.style.display = mode === 'run' ? '' : 'none';
+  if (mode === 'rel') { runSel.value = ''; activeRun = null; }
+  else if (activeRun && runSel.value !== activeRun) runSel.value = activeRun;
   updateLegend();
   render(sel.value);
 }
@@ -200,12 +231,16 @@ function updateLegend() {
   if (viewMode === 'rel') {
     el.innerHTML = `
       <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
-      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
+      <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>
+      <span style="margin-left:10px;color:#059669;font-weight:700">■</span><span style="margin-left:4px">OR nugget</span>
+      <span style="margin-left:10px;color:#b91c1c;font-weight:700">■</span><span style="margin-left:4px">AND nugget</span>`;
   } else {
     el.innerHTML = `
       <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (judged)</span>
       <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered (judged)</span>
-      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>`;
+      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>
+      <span style="margin-left:10px;color:#059669;font-weight:700">■</span><span style="margin-left:4px">OR nugget</span>
+      <span style="margin-left:10px;color:#b91c1c;font-weight:700">■</span><span style="margin-left:4px">AND nugget</span>`;
   }
 }
 
@@ -436,8 +471,9 @@ function renderMatrix(tid) {
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
     const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
+    const condCls = ni ? (ni.cond === 'OR' ? 'y-label y-label-or' : 'y-label y-label-and') : 'y-label y-label-none';
     yG.append('text')
-      .attr('class','y-label')
+      .attr('class', condCls)
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))

@@ -56,13 +56,13 @@ def load_data():
 
 
 def load_run_data():
-    """Load tevatron run and per-doc nugget ratings."""
-    runs = defaultdict(list)  # {tid: [(docid, rank, score)]}
+    """Load run file and per-doc nugget ratings."""
+    runs = defaultdict(list)  # {tid: [(docid, rank, score, run_name)]}
     with open(DATA_DIR / 'runs.neuclir2024.cover.test.txt') as f:
         for line in f:
             parts = line.strip().split()
-            if len(parts) >= 5:
-                runs[parts[0]].append((parts[2], int(parts[3]), float(parts[4])))
+            if len(parts) >= 6:
+                runs[parts[0]].append((parts[2], int(parts[3]), float(parts[4]), parts[5]))
 
     ratings = defaultdict(dict)  # {tid: {docid: rating_array}}
     with open(DATA_DIR / 'neuclir24.ratings.human.jsonl') as f:
@@ -101,11 +101,13 @@ def process_data(qrel, topics, docs, nugget_info, runs, ratings):
         tinfo = nugget_info.get(tid, {})
 
         # Build run data (sorted by retrieval rank)
-        run_list = sorted(runs.get(tid, []), key=lambda x: x[1])
+        run_entries = runs.get(tid, [])
+        run_name = run_entries[0][3] if run_entries else 'unknown'
+        run_list = sorted(run_entries, key=lambda x: x[1])
         run_ratings = ratings.get(tid, {})
 
-        run_docs_list = [docid for docid, _, _ in run_list]
-        run_scores_list = [round(score, 6) for _, _, score in run_list]
+        run_docs_list = [docid for docid, _, _, _ in run_list]
+        run_scores_list = [round(score, 6) for _, _, score, _ in run_list]
         run_rated_list = [docid in run_ratings for docid in run_docs_list]
         run_cov_list = []
         run_cells_list = []
@@ -134,6 +136,7 @@ def process_data(qrel, topics, docs, nugget_info, runs, ratings):
             'doc_cov': dict(doc_cov),
             'cells': cells,
             # run mode data
+            'run_name': run_name,
             'run_docs': run_docs_list,
             'run_scores': run_scores_list,
             'run_rated': run_rated_list,
