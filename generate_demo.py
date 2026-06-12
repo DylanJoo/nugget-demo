@@ -72,15 +72,7 @@ def load_run_data():
                 parts = line.strip().split()
                 if len(parts) >= 6:
                     run_entries[parts[0]].append((parts[2], int(parts[3]), float(parts[4]), parts[5]))
-        # infer run name from first entry
-        run_name = None
-        for entries in run_entries.values():
-            if entries:
-                run_name = entries[0][3]
-                break
-        if run_name is None:
-            run_name = run_file.stem
-        all_runs[run_name] = run_entries
+        all_runs[run_file.stem] = run_entries
 
     ratings = defaultdict(dict)  # {tid: {docid: rating_array}}
     with open(DATA_DIR / 'neuclir24.ratings.human.jsonl') as f:
