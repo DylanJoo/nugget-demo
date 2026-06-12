@@ -55,17 +55,32 @@ def load_data():
     return qrel, topics, docs, nugget_info
 
 
-RUN_FILE = DATA_DIR / 'runs.neuclir2024.cover.test.txt'
+RUN_FILES = [
+    DATA_DIR / 'runs.neuclir2024.cover.test.txt',
+    DATA_DIR / 'runs.neuclir2024.cover.lancer_expr-top100.test.txt',
+]
 
 
 def load_run_data():
-    """Load run file and per-doc nugget ratings."""
-    runs = defaultdict(list)  # {tid: [(docid, rank, score, run_name)]}
-    with open(RUN_FILE) as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 6:
-                runs[parts[0]].append((parts[2], int(parts[3]), float(parts[4]), parts[5]))
+    """Load all run files and per-doc nugget ratings."""
+    # all_runs: {run_name: {tid: [(docid, rank, score)]}}
+    all_runs = {}
+    for run_file in RUN_FILES:
+        run_entries = defaultdict(list)
+        with open(run_file) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 6:
+                    run_entries[parts[0]].append((parts[2], int(parts[3]), float(parts[4]), parts[5]))
+        # infer run name from first entry
+        run_name = None
+        for entries in run_entries.values():
+            if entries:
+                run_name = entries[0][3]
+                break
+        if run_name is None:
+            run_name = run_file.stem
+        all_runs[run_name] = run_entries
 
     ratings = defaultdict(dict)  # {tid: {docid: rating_array}}
     with open(DATA_DIR / 'neuclir24.ratings.human.jsonl') as f:
@@ -74,10 +89,38 @@ def load_run_data():
                 d = json.loads(line)
                 ratings[str(d['id'])][d['docid']] = d['rating']
 
-    return runs, ratings
+    return all_runs, ratings
 
 
-def process_data(qrel, topics, docs, nugget_info, runs, ratings):
+def _build_run_entries(run_entries_for_tid, sorted_nuggets, ratings_for_tid):
+    run_list = sorted(run_entries_for_tid, key=lambda x: x[1])
+    run_docs_list = [docid for docid, _, _, _ in run_list]
+    run_scores_list = [round(score, 6) for _, _, score, _ in run_list]
+    run_rated_list = [docid in ratings_for_tid for docid in run_docs_list]
+    run_cov_list = []
+    run_cells_list = []
+    for i, docid in enumerate(run_docs_list):
+        if docid in ratings_for_tid:
+            rating_arr = ratings_for_tid[docid]
+            cov = 0
+            for j, nid in enumerate(sorted_nuggets):
+                nidx_0 = int(nid) - 1
+                if nidx_0 < len(rating_arr) and rating_arr[nidx_0] == 3:
+                    run_cells_list.append([j, i, 3])
+                    cov += 1
+            run_cov_list.append(cov)
+        else:
+            run_cov_list.append(-1)
+    return {
+        'docs': run_docs_list,
+        'scores': run_scores_list,
+        'rated': run_rated_list,
+        'cov': run_cov_list,
+        'cells': run_cells_list,
+    }
+
+
+def process_data(qrel, topics, docs, nugget_info, all_runs, ratings):
     vis_data = {}
     for tid in sorted(topics.keys()):
         if tid not in qrel:
@@ -103,30 +146,10 @@ def process_data(qrel, topics, docs, nugget_info, runs, ratings):
 
         tinfo = nugget_info.get(tid, {})
 
-        # Build run data (sorted by retrieval rank)
-        run_entries = runs.get(tid, [])
-        run_name = run_entries[0][3] if run_entries else 'unknown'
-        run_list = sorted(run_entries, key=lambda x: x[1])
-        run_ratings = ratings.get(tid, {})
-
-        run_docs_list = [docid for docid, _, _, _ in run_list]
-        run_scores_list = [round(score, 6) for _, _, score, _ in run_list]
-        run_rated_list = [docid in run_ratings for docid in run_docs_list]
-        run_cov_list = []
-        run_cells_list = []
-
-        for i, docid in enumerate(run_docs_list):
-            if docid in run_ratings:
-                rating_arr = run_ratings[docid]
-                cov = 0
-                for j, nid in enumerate(sorted_nuggets):
-                    nidx_0 = int(nid) - 1
-                    if nidx_0 < len(rating_arr) and rating_arr[nidx_0] == 3:
-                        run_cells_list.append([j, i, 3])
-                        cov += 1
-                run_cov_list.append(cov)
-            else:
-                run_cov_list.append(-1)
+        runs_data = {}
+        for run_name, run_by_tid in all_runs.items():
+            entries = run_by_tid.get(tid, [])
+            runs_data[run_name] = _build_run_entries(entries, sorted_nuggets, ratings.get(tid, {}))
 
         vis_data[tid] = {
             'title': topics[tid]['title'],
@@ -138,20 +161,16 @@ def process_data(qrel, topics, docs, nugget_info, runs, ratings):
             'docs': sorted_docs,
             'doc_cov': dict(doc_cov),
             'cells': cells,
-            # run mode data
-            'run_name': run_name,
-            'run_docs': run_docs_list,
-            'run_scores': run_scores_list,
-            'run_rated': run_rated_list,
-            'run_cov': run_cov_list,
-            'run_cells': run_cells_list,
+            'runs': runs_data,
         }
 
     return vis_data
 
 
-def generate_html(vis_data, run_file_name='unknown'):
+def generate_html(vis_data, run_names=None):
     data_json = json.dumps(vis_data, ensure_ascii=False)
+    run_names = run_names or []
+    run_names_json = json.dumps(run_names)
 
     return '''<!DOCTYPE html>
 <html lang="en">
@@ -259,8 +278,12 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
     <select id="topic-sel"></select>
     <div class="mode-toggle">
       <button id="mode-rel" class="mode-btn active" onclick="setMode(\'rel\')">Relevant Docs</button>
-      <button id="mode-run" class="mode-btn" onclick="setMode(\'run\')">Run: ''' + run_file_name + '''</button>
+      <button id="mode-run" class="mode-btn" onclick="setMode(\'run\')">Run</button>
     </div>
+    <label class="opt-label" id="run-ctrl" style="display:none">
+      System&nbsp;
+      <select id="run-sel" onchange="render(document.getElementById(\'topic-sel\').value)"></select>
+    </label>
     <label class="opt-label" id="topk-ctrl" style="display:none">
       Top-K&nbsp;
       <select id="topk-sel" onchange="render(document.getElementById(\'topic-sel\').value)">
@@ -309,11 +332,22 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
 
 <script>
 const DATA = ''' + data_json + ''';
+const RUN_NAMES = ''' + run_names_json + ''';
 
 const topicIds = Object.keys(DATA).sort((a,b)=>+a-+b);
 let cellSize = 12;
 let viewMode = 'rel';
 let docsCache = null;
+
+// Populate run selector
+const runSel = document.getElementById('run-sel');
+RUN_NAMES.forEach(name => {
+  const o = document.createElement('option');
+  o.value = name;
+  o.textContent = name;
+  runSel.appendChild(o);
+});
+runSel.addEventListener('change', () => render(sel.value));
 
 // Load docs.json in the background for tooltip text
 fetch('docs.json').then(r => r.json()).then(d => { docsCache = d; }).catch(() => {});
@@ -345,7 +379,9 @@ function setMode(mode) {
   viewMode = mode;
   document.getElementById('mode-rel').classList.toggle('active', mode === 'rel');
   document.getElementById('mode-run').classList.toggle('active', mode === 'run');
-  document.getElementById('topk-ctrl').style.display = mode === 'run' ? '' : 'none';
+  const runVisible = mode === 'run' ? '' : 'none';
+  document.getElementById('run-ctrl').style.display = runVisible;
+  document.getElementById('topk-ctrl').style.display = runVisible;
   updateLegend();
   render(sel.value);
 }
@@ -390,9 +426,11 @@ function render(tid) {
       <div class="stat"><div class="stat-val">${density}%</div><div class="stat-lbl">Matrix Density</div></div>`;
   } else {
     const topK = +document.getElementById('topk-sel').value;
-    const totalRun = d.run_docs.length;
-    const judgedInTopK = d.run_rated.slice(0, topK).filter(Boolean).length;
-    const coveredCells = d.run_cells.filter(c => c[1] < topK).length;
+    const rn = document.getElementById('run-sel').value;
+    const rd = d.runs[rn] || {docs:[], rated:[], cells:[]};
+    const totalRun = rd.docs.length;
+    const judgedInTopK = rd.rated.slice(0, topK).filter(Boolean).length;
+    const coveredCells = rd.cells.filter(c => c[1] < topK).length;
     document.getElementById('stats').innerHTML = `
       <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
       <div class="stat"><div class="stat-val">${Math.min(topK, totalRun)}</div><div class="stat-lbl">Run Docs (top-${topK})</div></div>
@@ -406,7 +444,8 @@ function render(tid) {
     hint.textContent = 'Y-axis: nuggets sorted by coverage (most covered first) · X-axis: documents sorted by nuggets covered (most first) · Hover any cell for details';
   } else {
     const topK = +document.getElementById('topk-sel').value;
-    hint.textContent = `Y-axis: nuggets (sorted by relevant-doc coverage) · X-axis: top-${topK} run documents in retrieval rank order · Grey columns = unjudged`;
+    const rn = document.getElementById('run-sel').value;
+    hint.textContent = `System: ${rn} · Y-axis: nuggets (sorted by relevant-doc coverage) · X-axis: top-${topK} run documents in retrieval rank order · Grey columns = unjudged`;
   }
 
   renderMatrix(tid);
@@ -420,9 +459,11 @@ function renderMatrix(tid) {
   const tt = document.getElementById('tooltip');
 
   const isRun = viewMode === 'run';
-  const topK = isRun ? Math.min(+document.getElementById('topk-sel').value, d.run_docs.length) : 0;
+  const selectedRun = document.getElementById('run-sel').value;
+  const rd = (isRun && d.runs[selectedRun]) ? d.runs[selectedRun] : {docs:[],scores:[],rated:[],cov:[],cells:[]};
+  const topK = isRun ? Math.min(+document.getElementById('topk-sel').value, rd.docs.length) : 0;
 
-  const activeDocs = isRun ? d.run_docs.slice(0, topK) : d.docs;
+  const activeDocs = isRun ? rd.docs.slice(0, topK) : d.docs;
   const nD = activeDocs.length;
 
   const W = nD * cs + mL + mR;
@@ -453,7 +494,7 @@ function renderMatrix(tid) {
   // For run mode: grey background for unjudged columns
   if (isRun) {
     for (let i = 0; i < topK; i++) {
-      if (!d.run_rated[i]) {
+      if (!rd.rated[i]) {
         g.append('rect')
           .attr('x', i * cs).attr('y', 0)
           .attr('width', cs).attr('height', nN * cs)
@@ -464,7 +505,7 @@ function renderMatrix(tid) {
 
   // Cells
   const activeCells = isRun
-    ? d.run_cells.filter(c => c[1] < topK)
+    ? rd.cells.filter(c => c[1] < topK)
     : d.cells;
 
   function showTooltip(event, nugIdx, docIdx, label) {
@@ -483,9 +524,9 @@ function renderMatrix(tid) {
     let docSection = '';
     if (isRun) {
       const rank = docIdx + 1;
-      const score = d.run_scores[docIdx] !== undefined ? d.run_scores[docIdx].toFixed(4) : '—';
-      const isJudged = d.run_rated[docIdx];
-      const cov = d.run_cov[docIdx];
+      const score = rd.scores[docIdx] !== undefined ? rd.scores[docIdx].toFixed(4) : '—';
+      const isJudged = rd.rated[docIdx];
+      const cov = rd.cov[docIdx];
       const covText = isJudged ? `Covers <strong>${cov}</strong> nugget${cov!==1?'s':''} (judged)` : '<span class="badge-grey">UNJUDGED</span>';
       docSection = `
         <div class="tt-section">
@@ -556,7 +597,7 @@ function renderMatrix(tid) {
   // One full-height transparent rect per unjudged run column for hover
   if (isRun) {
     const unjudgedCols = [];
-    for (let i = 0; i < topK; i++) { if (!d.run_rated[i]) unjudgedCols.push(i); }
+    for (let i = 0; i < topK; i++) { if (!rd.rated[i]) unjudgedCols.push(i); }
     g.selectAll('rect.u')
       .data(unjudgedCols)
       .join('rect').attr('class','u')
@@ -565,9 +606,9 @@ function renderMatrix(tid) {
       .attr('fill', 'transparent')
       .on('mousemove', function(event, i) {
         colHL.attr('display',null).attr('x', i*cs);
-        const docId = d.run_docs[i];
+        const docId = rd.docs[i];
         const rank = i + 1;
-        const score = d.run_scores[i] !== undefined ? d.run_scores[i].toFixed(4) : '—';
+        const score = rd.scores[i] !== undefined ? rd.scores[i].toFixed(4) : '—';
         const di = getDoc(docId);
         tt.innerHTML = `
           <div class="tt-tag">Run Doc — Rank #${rank} &nbsp;·&nbsp; Score: ${score}</div>
@@ -593,7 +634,7 @@ function renderMatrix(tid) {
   // Build set of nugget indices covered by run docs (for y-label coloring)
   const coveredNuggetSet = new Set();
   if (isRun) {
-    d.run_cells.filter(c => c[1] < topK).forEach(c => coveredNuggetSet.add(c[0]));
+    rd.cells.filter(c => c[1] < topK).forEach(c => coveredNuggetSet.add(c[0]));
   }
 
   // Y-axis labels
@@ -688,15 +729,18 @@ def generate_docs_json(docs):
 if __name__ == '__main__':
     print('Loading data...')
     qrel, topics, docs, nugget_info = load_data()
-    runs, ratings = load_run_data()
+    all_runs, ratings = load_run_data()
     print('Processing...')
-    vis_data = process_data(qrel, topics, docs, nugget_info, runs, ratings)
-    stats = {tid: (len(v['nuggets']), len(v['docs']), len(v['cells']),
-                   len(v['run_docs']), sum(v['run_rated']), len(v['run_cells']))
-             for tid, v in vis_data.items()}
-    for tid, (nn, nd, nc, nr, nj, nrc) in stats.items():
-        print(f'  Topic {tid}: {nn} nuggets × {nd} rel-docs ({nc} pairs) | run: {nr} docs, {nj} judged, {nrc} covered pairs')
-    html = generate_html(vis_data, run_file_name=RUN_FILE.name)
+    vis_data = process_data(qrel, topics, docs, nugget_info, all_runs, ratings)
+    run_names = list(all_runs.keys())
+    for tid, v in vis_data.items():
+        nn, nd, nc = len(v['nuggets']), len(v['docs']), len(v['cells'])
+        run_summary = ' | '.join(
+            f"{rn}: {len(rd['docs'])} docs, {sum(rd['rated'])} judged, {len(rd['cells'])} covered"
+            for rn, rd in v['runs'].items()
+        )
+        print(f'  Topic {tid}: {nn} nuggets × {nd} rel-docs ({nc} pairs) | {run_summary}')
+    html = generate_html(vis_data, run_names=run_names)
     OUT_FILE.write_text(html, encoding='utf-8')
     size_kb = len(html.encode()) / 1024
     print(f'\nWrote {OUT_FILE}  ({size_kb:.0f} KB)')
