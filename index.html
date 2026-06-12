@@ -254,9 +254,12 @@ function render(tid) {
     const rd = d.runs[rn] || {docs:[], rated:[], cells:[]};
     const totalRun = rd.docs.length;
     const judgedInTopK = rd.rated.slice(0, topK).filter(Boolean).length;
-    const coveredCells = rd.cells.filter(c => c[1] < topK).length;
+    const topKCells = rd.cells.filter(c => c[1] < topK);
+    const coveredCells = topKCells.length;
+    const coveredNuggets = new Set(topKCells.map(c => c[0])).size;
     document.getElementById('stats').innerHTML = `
       <div class="stat"><div class="stat-val">${nN}</div><div class="stat-lbl">Nuggets</div></div>
+      <div class="stat"><div class="stat-val">${coveredNuggets} <span style="font-size:.95rem;font-weight:600;color:#3b82f6">/ ${nN}</span></div><div class="stat-lbl">Nuggets Covered</div></div>
       <div class="stat"><div class="stat-val">${Math.min(topK, totalRun)}</div><div class="stat-lbl">Run Docs (top-${topK})</div></div>
       <div class="stat"><div class="stat-val">${judgedInTopK}</div><div class="stat-lbl">Judged in Top-${topK}</div></div>
       <div class="stat"><div class="stat-val">${coveredCells.toLocaleString()}</div><div class="stat-lbl">Covered Pairs</div></div>`;
