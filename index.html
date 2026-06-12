@@ -132,7 +132,7 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
       <h2>Coverage Matrix</h2>
       <div class="matrix-opts">
         <div class="legend" id="legend">
-          <div class="legend-sq" style="background:#3b82f6"></div><span>Covered (label 3)</span>
+          <div class="legend-sq" style="background:#3b82f6"></div><span>Covered</span>
           <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>
         </div>
         <label class="opt-label">
@@ -214,16 +214,14 @@ function setMode(mode) {
 
 function updateLegend() {
   const el = document.getElementById('legend');
-  const shared = `
-    <div class="legend-sq" style="background:#34d399"></div><span>OR nugget — covered</span>
-    <div class="legend-sq" style="background:#f87171;margin-left:6px"></div><span>AND nugget — covered</span>
+  const base = `
+    <div class="legend-sq" style="background:#3b82f6"></div><span>Covered</span>
     <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0;margin-left:6px"></div><span>Not covered</span>`;
   if (viewMode === 'rel') {
-    el.innerHTML = shared;
+    el.innerHTML = base;
   } else {
-    el.innerHTML = shared + `
-      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>
-      <span style="margin-left:10px;font-size:.76rem;color:#94a3b8">· Y-label color: green/red = not yet covered · gray = covered by run</span>`;
+    el.innerHTML = base + `
+      <div class="legend-sq" style="background:#e2e8f0;margin-left:6px"></div><span>Unjudged</span>`;
   }
 }
 
@@ -394,10 +392,7 @@ function renderMatrix(tid) {
   }
 
   function cellFill(nugIdx, hover) {
-    const ni = d.nugget_info && d.nugget_info[d.nuggets[nugIdx]];
-    if (!ni) return hover ? '#1d4ed8' : '#3b82f6';
-    if (ni.cond === 'OR') return hover ? '#059669' : '#34d399';
-    return hover ? '#dc2626' : '#f87171';
+    return hover ? '#1d4ed8' : '#3b82f6';
   }
 
   g.selectAll('rect.c')
@@ -471,9 +466,8 @@ function renderMatrix(tid) {
     const y = i * cs + cs / 2;
     const cov = d.nugget_cov[nid];
     const ni = d.nugget_info && d.nugget_info[nid];
-    const labelQ = ni ? ni.question.substring(0, 38) + (ni.question.length > 38 ? '…' : '') : nid;
     let yFill;
-    if (isRun && coveredNuggetSet.has(i)) {
+    if (isRun && !coveredNuggetSet.has(i)) {
       yFill = '#d1d5db';
     } else if (ni && ni.cond === 'OR') {
       yFill = '#059669';
@@ -488,7 +482,7 @@ function renderMatrix(tid) {
       .attr('x', mL - 5).attr('y', y)
       .attr('text-anchor','end').attr('dominant-baseline','middle')
       .attr('font-size', Math.min(10, cs))
-      .text(cs >= 10 ? `${labelQ} (${cov})` : `(${cov})`)
+      .text(`#${nid} (${cov})`)
       .on('mousemove', (event) => {
         const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
         const answersHtml = ni
