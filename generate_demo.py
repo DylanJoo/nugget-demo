@@ -58,6 +58,7 @@ def load_data():
 RUN_FILES = [
     DATA_DIR / 'runs.neuclir2024.cover.test.txt',
     DATA_DIR / 'runs.neuclir2024.cover.lancer_expr-top100.test.txt',
+    DATA_DIR / 'runs.neuclir2024.cover.lancer_expr-top200.test.txt',
 ]
 
 
