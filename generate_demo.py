@@ -56,6 +56,8 @@ def load_data():
 
 
 RUN_FILES = [
+    DATA_DIR / 'runs.neuclir2024.bm25.test.txt',
+    DATA_DIR / 'runs.neuclir2024.lsr-milco.test.txt',
     DATA_DIR / 'runs.neuclir2024.cover.test.txt',
     DATA_DIR / 'runs.neuclir2024.cover.lancer_expr-top100.test.txt',
     DATA_DIR / 'runs.neuclir2024.cover.lancer_expr-top200.test.txt',
@@ -502,6 +504,14 @@ function renderMatrix(tid) {
     ? rd.cells.filter(c => c[1] < topK)
     : d.cells;
 
+  // For each nugget, the earliest doc index (column) where it appears
+  const firstOccurrence = {};
+  activeCells.forEach(c => {
+    if (!(c[0] in firstOccurrence) || c[1] < firstOccurrence[c[0]]) {
+      firstOccurrence[c[0]] = c[1];
+    }
+  });
+
   function showTooltip(event, nugIdx, docIdx, label) {
     const nugId = d.nuggets[nugIdx];
     const docId = activeDocs[docIdx];
@@ -561,8 +571,10 @@ function renderMatrix(tid) {
     tt.style.top = top + 'px';
   }
 
-  function cellFill(nugIdx, hover) {
-    return hover ? '#1d4ed8' : '#3b82f6';
+  function cellFill(nugIdx, docIdx, hover) {
+    const isRedundant = docIdx > firstOccurrence[nugIdx];
+    if (hover) return isRedundant ? '#60a5fa' : '#1d4ed8';
+    return isRedundant ? '#bfdbfe' : '#3b82f6';
   }
 
   g.selectAll('rect.c')
@@ -571,17 +583,17 @@ function renderMatrix(tid) {
     .attr('x', c => c[1]*cs).attr('y', c => c[0]*cs)
     .attr('width', Math.max(1, cs-1)).attr('height', Math.max(1, cs-1))
     .attr('rx', cs >= 8 ? 1.5 : 0)
-    .attr('fill', c => cellFill(c[0], false))
+    .attr('fill', c => cellFill(c[0], c[1], false))
     .on('mousemove', function(event, c) {
       rowHL.attr('display',null).attr('y', c[0]*cs);
       colHL.attr('display',null).attr('x', c[1]*cs);
-      d3.select(this).attr('fill', cellFill(c[0], true));
+      d3.select(this).attr('fill', cellFill(c[0], c[1], true));
       showTooltip(event, c[0], c[1], c[2]);
     })
     .on('mouseleave', function(event, c) {
       rowHL.attr('display','none');
       colHL.attr('display','none');
-      d3.select(this).attr('fill', cellFill(c[0], false));
+      d3.select(this).attr('fill', cellFill(c[0], c[1], false));
       tt.style.display = 'none';
     });
 
