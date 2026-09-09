@@ -8,6 +8,15 @@ from pathlib import Path
 DATA_DIR = Path(__file__).parent / 'data' / 'neuclir'
 OUT_FILE = Path(__file__).parent / 'index.html'
 DOCS_FILE = Path(__file__).parent / 'docs.json'
+CLAIMS_FILE = Path(__file__).parent / 'claims.json'
+
+# Claim-level comparison: fixed run pair + depth (see README for why these
+# were picked and how the claim/attribution data was produced).
+CLAIM_RUN_SPECS = [
+    ('bm25', DATA_DIR / 'runs.neuclir2024.bm25.test.txt'),
+    ('lancer-top100', DATA_DIR / 'runs.neuclir2024.cover.lancer_expr-top100.test.txt'),
+]
+CLAIM_DEPTH = 20
 
 
 def load_data():
@@ -87,6 +96,86 @@ def load_run_data():
     return all_runs, ratings
 
 
+def load_claim_data():
+    """Load decomposed-claim text and the claim<->nugget attribution produced
+    for the docs that appear in CLAIM_RUN_SPECS' top-CLAIM_DEPTH lists.
+
+    claims_by_doc: {docid: {'title':..., 'claims': [claim_text, ...]}}
+    attribution:   {topic_id: {docid: {nugget_id: [claim_idx, ...]}}}
+    """
+    claims_file = DATA_DIR / 'neuclir24.claims.byid.json'
+    attribution_file = DATA_DIR / 'neuclir24.claim_attribution.json'
+    claims_by_doc = json.loads(claims_file.read_text()) if claims_file.exists() else {}
+    attribution = json.loads(attribution_file.read_text()) if attribution_file.exists() else {}
+    return claims_by_doc, attribution
+
+
+def build_claim_runs(tid, sorted_nuggets, nidx, ratings_for_tid, claims_by_doc, attribution, claim_run_topk):
+    """Build the claim-granularity comparison data for one topic.
+
+    Each run's ranked doc list is flattened into one ordered sequence of
+    claim columns (doc rank order, then claim order within a doc). A cell
+    [nugget_idx, col] marks that column's claim as stating that nugget,
+    using the doc-level human rating to know WHICH nuggets a doc covers and
+    the claim attribution to know WHICH claim(s) state each one.
+    """
+    topic_attr = attribution.get(tid, {})
+    topic_runs = {}
+    for run_name, _ in CLAIM_RUN_SPECS:
+        doc_blocks = []
+        cells = []
+        col = 0
+        for rank, docid, score in claim_run_topk[run_name].get(tid, []):
+            doc_info = claims_by_doc.get(docid)
+            claims = doc_info['claims'] if doc_info else []
+            title = doc_info['title'] if doc_info else ''
+            rated = docid in ratings_for_tid
+            doc_attr = topic_attr.get(docid, {})
+            # invert {nugget_id: [claim_idx,...]} -> {claim_idx: [nugget_idx,...]}
+            claim_to_nuggets = defaultdict(list)
+            for nid, claim_idxs in doc_attr.items():
+                if nid not in nidx:
+                    continue
+                for ci in claim_idxs:
+                    claim_to_nuggets[ci].append(nidx[nid])
+
+            start_col = col
+            for ci in range(len(claims)):
+                for nix in claim_to_nuggets.get(ci, []):
+                    cells.append([nix, col])
+                col += 1
+
+            doc_blocks.append({
+                'docid': docid,
+                'title': title,
+                'rank': rank,
+                'score': round(score, 6),
+                'rated': rated,
+                'start': start_col,
+                'end': col,
+                'n_claims': len(claims),
+            })
+        topic_runs[run_name] = {'doc_blocks': doc_blocks, 'cells': cells, 'n_cols': col}
+    return topic_runs
+
+
+def _load_claim_run_topk():
+    claim_run_topk = {}
+    for run_name, path in CLAIM_RUN_SPECS:
+        by_topic = defaultdict(list)
+        with open(path) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 6:
+                    by_topic[parts[0]].append((int(parts[3]), parts[2], float(parts[4])))
+        topk = {}
+        for tid, lst in by_topic.items():
+            lst.sort(key=lambda x: x[0])
+            topk[tid] = lst[:CLAIM_DEPTH]
+        claim_run_topk[run_name] = topk
+    return claim_run_topk
+
+
 def _build_run_entries(run_entries_for_tid, sorted_nuggets, ratings_for_tid):
     run_list = sorted(run_entries_for_tid, key=lambda x: x[1])
     run_docs_list = [docid for docid, _, _, _ in run_list]
@@ -115,7 +204,11 @@ def _build_run_entries(run_entries_for_tid, sorted_nuggets, ratings_for_tid):
     }
 
 
-def process_data(qrel, topics, docs, nugget_info, all_runs, ratings):
+def process_data(qrel, topics, docs, nugget_info, all_runs, ratings, claims_by_doc=None, attribution=None):
+    claims_by_doc = claims_by_doc or {}
+    attribution = attribution or {}
+    claim_run_topk = _load_claim_run_topk()
+
     vis_data = {}
     for tid in sorted(topics.keys()):
         if tid not in qrel:
@@ -146,6 +239,10 @@ def process_data(qrel, topics, docs, nugget_info, all_runs, ratings):
             entries = run_by_tid.get(tid, [])
             runs_data[run_name] = _build_run_entries(entries, sorted_nuggets, ratings.get(tid, {}))
 
+        claim_runs = build_claim_runs(
+            tid, sorted_nuggets, nidx, ratings.get(tid, {}), claims_by_doc, attribution, claim_run_topk
+        )
+
         vis_data[tid] = {
             'title': topics[tid]['title'],
             'background': topics[tid].get('background', ''),
@@ -157,6 +254,7 @@ def process_data(qrel, topics, docs, nugget_info, all_runs, ratings):
             'doc_cov': dict(doc_cov),
             'cells': cells,
             'runs': runs_data,
+            'claim_runs': claim_runs,
         }
 
     return vis_data
@@ -166,6 +264,7 @@ def generate_html(vis_data, run_names=None):
     data_json = json.dumps(vis_data, ensure_ascii=False)
     run_names = run_names or []
     run_names_json = json.dumps(run_names)
+    claim_run_names_json = json.dumps([name for name, _ in CLAIM_RUN_SPECS])
 
     return '''<!DOCTYPE html>
 <html lang="en">
@@ -256,6 +355,21 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
 .y-label:hover{fill:#1d4ed8}
 .x-label{font-size:9px;fill:#94a3b8}
 .axis-title{font-size:10px;fill:#94a3b8;font-weight:600}
+
+/* Claims comparison view */
+#claims-summary{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px}
+.cmp-card{flex:1;min-width:240px;border-radius:8px;padding:12px 16px;border:1px solid #e2e8f0}
+.cmp-card.winner{border-color:#3b82f6;background:linear-gradient(135deg,#eff6ff,#dbeafe)}
+.cmp-name{font-weight:700;font-size:.88rem;color:#0f172a;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.cmp-crown{font-size:.7rem;background:#1d4ed8;color:#fff;padding:1px 7px;border-radius:9px;font-weight:700}
+.cmp-row{display:flex;justify-content:space-between;font-size:.78rem;color:#475569;padding:2px 0}
+.cmp-row b{color:#0f172a}
+.claim-run-block{margin-bottom:18px}
+.claim-run-title{font-size:.82rem;font-weight:700;color:#0f172a;margin-bottom:6px}
+.claim-matrix-wrap{overflow-x:auto;border:1px solid #e2e8f0;border-radius:6px;background:#fafafa;cursor:crosshair}
+.doc-hdr-label{font-size:8px;fill:#64748b;cursor:default}
+.doc-hdr-label:hover{fill:#1d4ed8;font-weight:700}
+.doc-sep{stroke:#94a3b8;stroke-width:1}
 </style>
 </head>
 <body>
@@ -274,6 +388,7 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
     <div class="mode-toggle">
       <button id="mode-rel" class="mode-btn active" onclick="setMode(\'rel\')">Relevant Docs</button>
       <button id="mode-run" class="mode-btn" onclick="setMode(\'run\')">Run</button>
+      <button id="mode-claims" class="mode-btn" onclick="setMode(\'claims\')">Claims (BM25 vs Lancer)</button>
     </div>
     <label class="opt-label" id="run-ctrl" style="display:none">
       System&nbsp;
@@ -296,7 +411,7 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
 
   <div class="stats" id="stats"></div>
 
-  <div class="card">
+  <div class="card" id="matrix-card">
     <div class="matrix-header">
       <h2>Coverage Matrix</h2>
       <div class="matrix-opts">
@@ -321,6 +436,32 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
     </div>
   </div>
 
+  <div class="card" id="claims-card" style="display:none">
+    <div class="matrix-header">
+      <h2>Claim-level Coverage &amp; Redundancy — top-''' + str(CLAIM_DEPTH) + ''' docs per run</h2>
+      <div class="matrix-opts">
+        <div class="legend" id="claims-legend">
+          <div class="legend-sq" style="background:#3b82f6"></div><span>Nugget-stating claim</span>
+          <div class="legend-sq" style="background:#bfdbfe"></div><span>Redundant (nugget already seen)</span>
+          <div class="legend-sq" style="background:#f1f5f9;border:1px solid #e2e8f0"></div><span>Other claim</span>
+          <div class="legend-sq" style="background:#e8ecf0"></div><span>Unrated doc</span>
+        </div>
+        <label class="opt-label">
+          Claim width&nbsp;
+          <input type="range" id="claim-size-slider" min="3" max="16" value="6" step="1">
+          <span id="claim-size-val">6</span>px
+        </label>
+      </div>
+    </div>
+    <p class="matrix-hint">
+      Each thin column is one decomposed claim, grouped by source document (rank order, boundary = doc edge) &nbsp;·&nbsp;
+      Row = nugget &nbsp;·&nbsp; A claim cell lightens once that nugget was already stated by an earlier claim in the same run &nbsp;·&nbsp;
+      Hover a claim or a doc header for details
+    </p>
+    <div id="claims-summary"></div>
+    <div id="claims-matrices"></div>
+  </div>
+
 </div>
 
 <div id="tooltip"></div>
@@ -328,11 +469,14 @@ ul.tt-answers li{color:#a5f3d0;font-size:.75rem;line-height:1.5;margin-bottom:1p
 <script>
 const DATA = ''' + data_json + ''';
 const RUN_NAMES = ''' + run_names_json + ''';
+const CLAIM_RUN_NAMES = ''' + claim_run_names_json + ''';
 
 const topicIds = Object.keys(DATA).sort((a,b)=>+a-+b);
 let cellSize = 12;
+let claimCellSize = 6;
 let viewMode = 'rel';
 let docsCache = null;
+let claimsCache = null;
 
 // Populate run selector
 const runSel = document.getElementById('run-sel');
@@ -346,6 +490,7 @@ runSel.addEventListener('change', () => render(sel.value));
 
 // Load docs.json in the background for tooltip text
 fetch('docs.json').then(r => r.json()).then(d => { docsCache = d; }).catch(() => {});
+fetch('claims.json').then(r => r.json()).then(d => { claimsCache = d; }).catch(() => {});
 
 function getDoc(docId) {
   return (docsCache && docsCache[docId]) || {title: docId, text: ''};
@@ -370,13 +515,25 @@ slider.addEventListener('input', () => {
   render(sel.value);
 });
 
+const claimSlider = document.getElementById('claim-size-slider');
+const claimSizeVal = document.getElementById('claim-size-val');
+claimSlider.addEventListener('input', () => {
+  claimCellSize = +claimSlider.value;
+  claimSizeVal.textContent = claimCellSize;
+  if (viewMode === 'claims') render(sel.value);
+});
+
 function setMode(mode) {
   viewMode = mode;
   document.getElementById('mode-rel').classList.toggle('active', mode === 'rel');
   document.getElementById('mode-run').classList.toggle('active', mode === 'run');
+  document.getElementById('mode-claims').classList.toggle('active', mode === 'claims');
   const runVisible = mode === 'run' ? '' : 'none';
   document.getElementById('run-ctrl').style.display = runVisible;
   document.getElementById('topk-ctrl').style.display = runVisible;
+  document.getElementById('stats').style.display = mode === 'claims' ? 'none' : '';
+  document.getElementById('matrix-card').style.display = mode === 'claims' ? 'none' : '';
+  document.getElementById('claims-card').style.display = mode === 'claims' ? '' : 'none';
   updateLegend();
   render(sel.value);
 }
@@ -406,6 +563,11 @@ function render(tid) {
       <div class="info-block"><strong>Background</strong><p>${esc(d.background)}</p></div>
       <div class="info-block"><strong>Problem Statement</strong><p>${esc(d.problem_statement)}</p></div>
     </div>`;
+
+  if (viewMode === 'claims') {
+    renderClaimsView(tid);
+    return;
+  }
 
   // Stats
   const nN = d.nuggets.length;
@@ -715,6 +877,255 @@ function renderMatrix(tid) {
     .text(xTitle);
 }
 
+// ---- Claims comparison view ----
+
+function findDocForCol(rd, col) {
+  return rd.doc_blocks.find(db => col >= db.start && col < db.end);
+}
+
+function getClaimInfo(docid) {
+  return (claimsCache && claimsCache[docid]) || {title: docid, claims: []};
+}
+
+function computeRunStats(d, rd) {
+  const coveredNuggetSet = new Set(rd.cells.map(c => c[0]));
+  const firstOcc = {};
+  rd.cells.forEach(c => { if (!(c[0] in firstOcc) || c[1] < firstOcc[c[0]]) firstOcc[c[0]] = c[1]; });
+  const redundantCells = rd.cells.filter(c => c[1] > firstOcc[c[0]]).length;
+
+  let firstFullyRedundantRank = null;
+  let fullyRedundantCount = 0;
+  rd.doc_blocks.forEach(db => {
+    const docCells = rd.cells.filter(c => c[1] >= db.start && c[1] < db.end);
+    if (docCells.length === 0) return;
+    const isFullyRedundant = docCells.every(c => c[1] > firstOcc[c[0]]);
+    if (isFullyRedundant) {
+      fullyRedundantCount++;
+      if (firstFullyRedundantRank === null) firstFullyRedundantRank = db.rank;
+    }
+  });
+
+  return {
+    nuggetsCovered: coveredNuggetSet.size,
+    totalClaims: rd.n_cols,
+    coveredCells: rd.cells.length,
+    redundantCells,
+    fullyRedundantCount,
+    firstFullyRedundantRank,
+    docsShown: rd.doc_blocks.length,
+    ratedDocs: rd.doc_blocks.filter(db => db.rated).length,
+  };
+}
+
+function renderClaimsView(tid) {
+  const d = DATA[tid];
+  const nN = d.nuggets.length;
+
+  const runStats = {};
+  CLAIM_RUN_NAMES.forEach(rn => {
+    const rd = d.claim_runs[rn] || {doc_blocks: [], cells: [], n_cols: 0};
+    runStats[rn] = computeRunStats(d, rd);
+  });
+
+  let winner = CLAIM_RUN_NAMES[0];
+  CLAIM_RUN_NAMES.forEach(rn => {
+    const a = runStats[winner], b = runStats[rn];
+    if (b.nuggetsCovered > a.nuggetsCovered ||
+        (b.nuggetsCovered === a.nuggetsCovered && b.redundantCells < a.redundantCells)) {
+      winner = rn;
+    }
+  });
+
+  const summaryEl = document.getElementById('claims-summary');
+  summaryEl.innerHTML = CLAIM_RUN_NAMES.map(rn => {
+    const s = runStats[rn];
+    const isWinner = rn === winner;
+    const redundantPct = s.coveredCells ? (100 * s.redundantCells / s.coveredCells).toFixed(0) : '0';
+    return `
+      <div class="cmp-card ${isWinner ? 'winner' : ''}">
+        <div class="cmp-name">${esc(rn)} ${isWinner ? '<span class="cmp-crown">More nugget coverage</span>' : ''}</div>
+        <div class="cmp-row"><span>Nuggets covered</span><b>${s.nuggetsCovered} / ${nN}</b></div>
+        <div class="cmp-row"><span>Docs shown (human-rated)</span><b>${s.docsShown} (${s.ratedDocs})</b></div>
+        <div class="cmp-row"><span>Claims total</span><b>${s.totalClaims}</b></div>
+        <div class="cmp-row"><span>Nugget-stating claims</span><b>${s.coveredCells}</b></div>
+        <div class="cmp-row"><span>↳ redundant (nugget already seen)</span><b>${s.redundantCells} (${redundantPct}%)</b></div>
+        <div class="cmp-row"><span>Fully-redundant docs</span><b>${s.fullyRedundantCount}${s.firstFullyRedundantRank ? ' · first @ rank ' + s.firstFullyRedundantRank : ''}</b></div>
+      </div>`;
+  }).join('');
+
+  const container = document.getElementById('claims-matrices');
+  container.innerHTML = '';
+  CLAIM_RUN_NAMES.forEach(rn => {
+    const rd = d.claim_runs[rn] || {doc_blocks: [], cells: [], n_cols: 0};
+    const block = document.createElement('div');
+    block.className = 'claim-run-block';
+    block.innerHTML = `
+      <div class="claim-run-title">${esc(rn)} — ${rd.doc_blocks.length} docs (top-''' + str(CLAIM_DEPTH) + '''), ${rd.n_cols} claims</div>
+      <div class="claim-matrix-wrap"><svg></svg></div>`;
+    container.appendChild(block);
+    renderClaimMatrix(tid, rn, block.querySelector('svg'));
+  });
+}
+
+function isRedundantCell(rd, nugIdx, col) {
+  let minCol = Infinity;
+  rd.cells.forEach(c => { if (c[0] === nugIdx && c[1] < minCol) minCol = c[1]; });
+  return col > minCol;
+}
+
+function positionTooltip(event, tt) {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let left = event.clientX + 16, top = event.clientY - 12;
+  if (left + 480 > vw) left = event.clientX - 488;
+  if (top < 4) top = 4;
+  const ttH = tt.scrollHeight;
+  if (top + ttH > vh - 8) top = Math.max(4, vh - ttH - 8);
+  tt.style.left = left + 'px';
+  tt.style.top = top + 'px';
+}
+
+function renderClaimMatrix(tid, runName, svgEl) {
+  const d = DATA[tid];
+  const nN = d.nuggets.length;
+  const rd = d.claim_runs[runName] || {doc_blocks: [], cells: [], n_cols: 0};
+  const cs = claimCellSize;
+  const mL = 82, mT = 18, mR = 20, mB = 6;
+  const nD = rd.n_cols;
+  const W = Math.max(1, nD) * cs + mL + mR;
+  const H = nN * cs + mT + mB;
+  const tt = document.getElementById('tooltip');
+
+  const svg = d3.select(svgEl).attr('width', W).attr('height', H);
+  svg.selectAll('*').remove();
+  const g = svg.append('g').attr('transform', `translate(${mL},${mT})`);
+
+  rd.doc_blocks.forEach(db => {
+    if (!db.rated) {
+      g.append('rect').attr('x', db.start * cs).attr('y', 0)
+        .attr('width', (db.end - db.start) * cs).attr('height', nN * cs)
+        .attr('fill', '#e8ecf0').attr('pointer-events', 'none');
+    }
+  });
+
+  rd.doc_blocks.forEach(db => {
+    g.append('line').attr('class', 'doc-sep')
+      .attr('x1', db.start * cs).attr('x2', db.start * cs)
+      .attr('y1', 0).attr('y2', nN * cs);
+  });
+
+  const rowHL = g.append('rect')
+    .attr('fill', 'rgba(59,130,246,.08)').attr('pointer-events', 'none').attr('display', 'none')
+    .attr('x', 0).attr('width', nD * cs).attr('height', cs);
+
+  function showClaimTooltip(event, nugIdx, col) {
+    const db = findDocForCol(rd, col);
+    if (!db) return;
+    const ci = col - db.start;
+    const info = getClaimInfo(db.docid);
+    const claimText = info.claims[ci] || '';
+    const nugId = d.nuggets[nugIdx];
+    const ni = d.nugget_info && d.nugget_info[nugId];
+    const condBadge = ni ? `<span class="badge-${ni.cond === 'OR' ? 'or' : 'and'}">${esc(ni.cond)}</span>` : '';
+    const answersHtml = ni ? `<ul class="tt-answers">${ni.answers.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : '';
+    const redundant = isRedundantCell(rd, nugIdx, col);
+
+    tt.innerHTML = `
+      <div class="tt-tag">Nugget #${esc(nugId)} ${condBadge}</div>
+      <div class="tt-title">${ni ? esc(ni.question) : 'Nugget #' + esc(nugId)}</div>
+      ${answersHtml}
+      <div class="tt-section">
+        <div class="tt-tag">${esc(runName)} — Doc rank #${db.rank}${redundant ? ' &nbsp;·&nbsp; <span class="badge-grey">REDUNDANT (nugget already seen earlier in this run)</span>' : ' &nbsp;·&nbsp; <span class="badge-blue">FIRST TO STATE THIS NUGGET</span>'}</div>
+        <div class="tt-title">${esc(info.title || db.docid)}</div>
+        <div class="tt-text">${esc(claimText)}</div>
+        <div class="tt-id">${db.docid}#${ci}</div>
+      </div>`;
+    tt.style.display = 'block';
+    positionTooltip(event, tt);
+  }
+
+  function showClaimColTooltip(event, col) {
+    const db = findDocForCol(rd, col);
+    if (!db) return;
+    const ci = col - db.start;
+    const info = getClaimInfo(db.docid);
+    const claimText = info.claims[ci] || '';
+    tt.innerHTML = `
+      <div class="tt-tag">${esc(runName)} — Doc rank #${db.rank}${db.rated ? '' : ' &nbsp;·&nbsp; <span class="badge-grey">UNRATED DOC</span>'}</div>
+      <div class="tt-title">${esc(info.title || db.docid)}</div>
+      <div class="tt-text">${esc(claimText)}</div>
+      <div class="tt-sub" style="margin-top:6px">Not attributed to any covered nugget${db.rated ? '' : ' (doc has no human nugget ratings)'}</div>
+      <div class="tt-id">${db.docid}#${ci}</div>`;
+    tt.style.display = 'block';
+    positionTooltip(event, tt);
+  }
+
+  function showDocHeaderTooltip(event, db) {
+    const info = getClaimInfo(db.docid);
+    tt.innerHTML = `
+      <div class="tt-tag">${esc(runName)} — Rank #${db.rank} &nbsp;·&nbsp; Score: ${db.score}</div>
+      <div class="tt-title">${esc(info.title || db.docid)}</div>
+      <div class="tt-sub" style="margin-top:4px">${db.n_claims} claims${db.rated ? '' : ' &nbsp;·&nbsp; <span class="badge-grey">UNRATED</span>'}</div>
+      <div class="tt-id">${db.docid}</div>`;
+    tt.style.display = 'block';
+    positionTooltip(event, tt);
+  }
+
+  // Full-height transparent hit-target per claim column, drawn BEFORE the
+  // colored covered-nugget cells so a covered cell's own (smaller) rect
+  // still wins the hover for its row.
+  g.selectAll('rect.allcol').data(d3.range(nD)).join('rect').attr('class', 'allcol')
+    .attr('x', i => i * cs).attr('y', 0)
+    .attr('width', Math.max(1, cs - 1)).attr('height', nN * cs)
+    .attr('fill', 'transparent')
+    .on('mousemove', function(event, i) { showClaimColTooltip(event, i); })
+    .on('mouseleave', function() { tt.style.display = 'none'; });
+
+  function cellFill(nugIdx, col, hover) {
+    const redundant = isRedundantCell(rd, nugIdx, col);
+    if (hover) return redundant ? '#60a5fa' : '#1d4ed8';
+    return redundant ? '#bfdbfe' : '#3b82f6';
+  }
+
+  g.selectAll('rect.c').data(rd.cells).join('rect').attr('class', 'c')
+    .attr('x', c => c[1] * cs).attr('y', c => c[0] * cs)
+    .attr('width', Math.max(1, cs - 1)).attr('height', Math.max(1, cs - 1))
+    .attr('rx', cs >= 8 ? 1.5 : 0)
+    .attr('fill', c => cellFill(c[0], c[1], false))
+    .on('mousemove', function(event, c) {
+      rowHL.attr('display', null).attr('y', c[0] * cs);
+      d3.select(this).attr('fill', cellFill(c[0], c[1], true));
+      showClaimTooltip(event, c[0], c[1]);
+    })
+    .on('mouseleave', function(event, c) {
+      rowHL.attr('display', 'none');
+      d3.select(this).attr('fill', cellFill(c[0], c[1], false));
+      tt.style.display = 'none';
+    });
+
+  const coveredNuggetIdx = new Set(rd.cells.map(c => c[0]));
+  const yG = svg.append('g').attr('transform', `translate(0,${mT})`);
+  const yShowEvery = cs >= 10 ? 1 : cs >= 6 ? 2 : 5;
+  d.nuggets.forEach((nid, i) => {
+    if (i % yShowEvery !== 0) return;
+    const y = i * cs + cs / 2;
+    yG.append('text').attr('class', 'y-label')
+      .attr('fill', coveredNuggetIdx.has(i) ? '#475569' : '#d1d5db')
+      .attr('x', mL - 5).attr('y', y).attr('text-anchor', 'end').attr('dominant-baseline', 'middle')
+      .attr('font-size', Math.min(10, Math.max(cs, 6)))
+      .text(`#${nid}`);
+  });
+
+  const hdrG = svg.append('g').attr('transform', `translate(${mL},${mT - 5})`);
+  rd.doc_blocks.forEach(db => {
+    const w = (db.end - db.start) * cs;
+    if (w < 10) return;
+    hdrG.append('text').attr('class', 'doc-hdr-label')
+      .attr('x', db.start * cs + w / 2).attr('y', 0).attr('text-anchor', 'middle')
+      .text(`D${db.rank}`)
+      .on('mousemove', (event) => showDocHeaderTooltip(event, db));
+  });
+}
+
 // Initial render
 render(topicIds[0]);
 </script>
@@ -732,8 +1143,9 @@ if __name__ == '__main__':
     print('Loading data...')
     qrel, topics, docs, nugget_info = load_data()
     all_runs, ratings = load_run_data()
+    claims_by_doc, attribution = load_claim_data()
     print('Processing...')
-    vis_data = process_data(qrel, topics, docs, nugget_info, all_runs, ratings)
+    vis_data = process_data(qrel, topics, docs, nugget_info, all_runs, ratings, claims_by_doc, attribution)
     run_names = list(all_runs.keys())
     for tid, v in vis_data.items():
         nn, nd, nc = len(v['nuggets']), len(v['docs']), len(v['cells'])
@@ -741,7 +1153,12 @@ if __name__ == '__main__':
             f"{rn}: {len(rd['docs'])} docs, {sum(rd['rated'])} judged, {len(rd['cells'])} covered"
             for rn, rd in v['runs'].items()
         )
+        claim_summary = ' | '.join(
+            f"{rn}: {len(cd['doc_blocks'])} docs, {cd['n_cols']} claims, {len(cd['cells'])} covered"
+            for rn, cd in v['claim_runs'].items()
+        )
         print(f'  Topic {tid}: {nn} nuggets × {nd} rel-docs ({nc} pairs) | {run_summary}')
+        print(f'    claims: {claim_summary}')
     html = generate_html(vis_data, run_names=run_names)
     OUT_FILE.write_text(html, encoding='utf-8')
     size_kb = len(html.encode()) / 1024
@@ -750,3 +1167,7 @@ if __name__ == '__main__':
     DOCS_FILE.write_text(docs_json, encoding='utf-8')
     docs_kb = len(docs_json.encode()) / 1024
     print(f'Wrote {DOCS_FILE}  ({docs_kb:.0f} KB)')
+    claims_json = json.dumps(claims_by_doc, ensure_ascii=False)
+    CLAIMS_FILE.write_text(claims_json, encoding='utf-8')
+    claims_kb = len(claims_json.encode()) / 1024
+    print(f'Wrote {CLAIMS_FILE}  ({claims_kb:.0f} KB)')
