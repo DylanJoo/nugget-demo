@@ -42,6 +42,7 @@ def build_doc_runs(tid, nugget_ids, doc_coverage_for_tid, claims_by_doc, attribu
     out = {}
     for run_name in run_names:
         seen = set()
+        first_new_rank = {}  # nugget_id -> rank of the doc that first surfaced it
         docs_out = []
         for rank, docid, score in claim_run_topk[run_name].get(tid, []):
             info = claims_by_doc.get(docid) or {'title': '', 'claims': []}
@@ -59,11 +60,15 @@ def build_doc_runs(tid, nugget_ids, doc_coverage_for_tid, claims_by_doc, attribu
                 covered_ids = [nid for nid in nugget_ids if nid in covered_set]
                 new_ids = sorted(covered_set - seen, key=int)
                 redundant_ids = sorted(covered_set & seen, key=int)
+                for nid in new_ids:
+                    first_new_rank[nid] = rank
                 seen |= covered_set
                 cum_covered = len(seen)
+                new_efficiency = round(len(new_ids) / len(claims), 4) if claims else 0.0
             else:
                 covered_ids = new_ids = redundant_ids = None
                 cum_covered = None
+                new_efficiency = None
 
             docs_out.append({
                 'docid': docid,
@@ -78,10 +83,14 @@ def build_doc_runs(tid, nugget_ids, doc_coverage_for_tid, claims_by_doc, attribu
                 'new_ids': new_ids,
                 'redundant_ids': redundant_ids,
                 'cum_covered': cum_covered,
+                'new_efficiency': new_efficiency,
             })
 
         rated_docs = [d for d in docs_out if d['rated']]
         fully_redundant = [d for d in rated_docs if len(d['covered_ids']) > 0 and len(d['new_ids']) == 0]
+        total_claims_rated = sum(d['n_claims'] for d in rated_docs)
+        new_per_100_claims = round(100 * len(seen) / total_claims_rated, 2) if total_claims_rated else 0.0
+        avg_first_new_rank = round(sum(first_new_rank.values()) / len(first_new_rank), 2) if first_new_rank else None
         out[run_name] = {
             'docs': docs_out,
             'summary': {
@@ -92,6 +101,8 @@ def build_doc_runs(tid, nugget_ids, doc_coverage_for_tid, claims_by_doc, attribu
                 'avg_claims': round(sum(d['n_claims'] for d in docs_out) / len(docs_out), 1) if docs_out else 0,
                 'n_fully_redundant': len(fully_redundant),
                 'first_fully_redundant_rank': fully_redundant[0]['rank'] if fully_redundant else None,
+                'new_per_100_claims': new_per_100_claims,
+                'avg_first_new_rank': avg_first_new_rank,
             },
         }
     return out
@@ -181,6 +192,7 @@ select:focus{border-color:#3b82f6}
 .chip.new{background:#dbeafe;color:#1e3a8a}
 .chip.redundant{background:#fef3c7;color:#92400e}
 .chip.claims{background:#f3e8ff;color:#6b21a8}
+.chip.efficiency{background:#dcfce7;color:#166534}
 .cum{font-size:.7rem;color:#94a3b8;margin-top:5px}
 
 details.drill{margin-top:7px}
@@ -256,11 +268,13 @@ function renderDocCard(d, doc) {
   let chips, drillNuggets = '';
   if (doc.rated) {
     const nCovered = doc.covered_ids.length, nNew = doc.new_ids.length, nRedundant = doc.redundant_ids.length;
+    const effPct = (doc.new_efficiency * 100).toFixed(1);
     chips = `
       <div class="chip claims"><b>${doc.n_claims}</b> claims</div>
       <div class="chip"><b>${nCovered}</b> covered</div>
       <div class="chip new"><b>${nNew}</b> new</div>
-      <div class="chip redundant"><b>${nRedundant}</b> redundant</div>`;
+      <div class="chip redundant"><b>${nRedundant}</b> redundant</div>
+      <div class="chip efficiency" title="New nuggets per claim in this document"><b>${effPct}%</b> new/claim</div>`;
     const parts = [];
     if (nNew) parts.push(`<div><strong style="font-size:.7rem;color:#1e3a8a">New nuggets</strong>${idList(d, doc.new_ids)}</div>`);
     if (nRedundant) parts.push(`<div><strong style="font-size:.7rem;color:#92400e">Redundant nuggets (already seen)</strong>${idList(d, doc.redundant_ids)}</div>`);
@@ -318,6 +332,8 @@ function renderRunColumn(d, runName, winner) {
       <div class="row"><span>Docs shown (rated)</span><b>${s.n_docs} (${s.n_rated})</b></div>
       <div class="row"><span>Avg claims / doc</span><b>${s.avg_claims}</b></div>
       <div class="row"><span>Fully-redundant docs</span><b>${s.n_fully_redundant}${s.first_fully_redundant_rank ? ' · first @ rank ' + s.first_fully_redundant_rank : ''}</b></div>
+      <div class="row" title="New (unique) nuggets found per 100 claims read across this run's rated docs"><span>New-nugget efficiency</span><b>${s.new_per_100_claims} / 100 claims</b></div>
+      <div class="row" title="Mean retrieval rank at which each new nugget was first surfaced — lower means the run front-loads novel information"><span>Avg rank of new-nugget discovery</span><b>${s.avg_first_new_rank !== null ? s.avg_first_new_rank : '—'}</b></div>
     </div>`;
   const cardsHtml = rd.docs.map(doc => renderDocCard(d, doc)).join('');
   return `<div class="run-col">${summaryHtml}${cardsHtml}</div>`;
